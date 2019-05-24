@@ -6,9 +6,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -33,9 +31,6 @@ type Handler func(remoteAddr net.Addr, from string, to []string, data []byte)
 
 // HandlerRcpt function called on RCPT. Return accept status.
 type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
-
-// AuthHandler function called when a login attempt is performed. Returns true if credentials are correct.
-type AuthHandler func(remoteAddr net.Addr, mechanism string, username []byte, password []byte, shared []byte) (bool, error)
 
 // ListenAndServe listens on the TCP network address addr
 // and then calls Serve with handler to handle requests
@@ -76,21 +71,18 @@ type LogFunc func(remoteIP, verb, line string)
 
 // Server is an SMTP server.
 type Server struct {
-	Addr         string // TCP address to listen on, defaults to ":25" (all addresses, port 25) if empty
-	Appname      string
-	AuthHandler  AuthHandler
-	AuthMechs    map[string]bool // Override list of allowed authentication mechanisms. Currently supported: LOGIN, PLAIN, CRAM-MD5. Enabling LOGIN and PLAIN will reduce RFC 4954 compliance.
-	AuthRequired bool            // Require authentication for every command except AUTH, EHLO, HELO, NOOP, RSET or QUIT as per RFC 4954. Ignored if AuthHandler is not configured.
-	Handler      Handler
-	HandlerRcpt  HandlerRcpt
-	Hostname     string
-	LogRead      LogFunc
-	LogWrite     LogFunc
-	MaxSize      int // Maximum message size allowed, in bytes
-	Timeout      time.Duration
-	TLSConfig    *tls.Config
-	TLSListener  bool // Listen for incoming TLS connections only (not recommended as it may reduce compatibility). Ignored if TLS is not configured.
-	TLSRequired  bool // Require TLS for every command except NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207. Ignored if TLS is not configured.
+	Addr        string // TCP address to listen on, defaults to ":25" (all addresses, port 25) if empty
+	Appname     string
+	Handler     Handler
+	HandlerRcpt HandlerRcpt
+	Hostname    string
+	LogRead     LogFunc
+	LogWrite    LogFunc
+	MaxSize     int // Maximum message size allowed, in bytes
+	Timeout     time.Duration
+	TLSConfig   *tls.Config
+	TLSListener bool // Listen for incoming TLS connections only (not recommended as it may reduce compatibility). Ignored if TLS is not configured.
+	TLSRequired bool // Require TLS for every command except NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207. Ignored if TLS is not configured.
 }
 
 // ConfigureTLS creates a TLS configuration from certificate and key files.
@@ -184,15 +176,14 @@ func (srv *Server) Serve(ln net.Listener) error {
 }
 
 type session struct {
-	srv           *Server
-	conn          net.Conn
-	br            *bufio.Reader
-	bw            *bufio.Writer
-	remoteIP      string // Remote IP address
-	remoteHost    string // Remote hostname according to reverse DNS lookup
-	remoteName    string // Remote hostname as supplied with EHLO
-	tls           bool
-	authenticated bool
+	srv        *Server
+	conn       net.Conn
+	br         *bufio.Reader
+	bw         *bufio.Writer
+	remoteIP   string // Remote IP address
+	remoteHost string // Remote hostname according to reverse DNS lookup
+	remoteName string // Remote hostname as supplied with EHLO
+	tls        bool
 }
 
 // Create new session from connection.
@@ -268,10 +259,6 @@ loop:
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
 				break
 			}
-			if s.srv.AuthHandler != nil && s.srv.AuthRequired && !s.authenticated {
-				s.writef("530 5.7.0 Authentication required")
-				break
-			}
 
 			match := mailFromRE.FindStringSubmatch(args)
 			if match == nil {
@@ -309,10 +296,7 @@ loop:
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
 				break
 			}
-			if s.srv.AuthHandler != nil && s.srv.AuthRequired && !s.authenticated {
-				s.writef("530 5.7.0 Authentication required")
-				break
-			}
+
 			if !gotFrom {
 				s.writef("503 5.5.1 Bad sequence of commands (MAIL required before RCPT)")
 				break
@@ -343,10 +327,7 @@ loop:
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
 				break
 			}
-			if s.srv.AuthHandler != nil && s.srv.AuthRequired && !s.authenticated {
-				s.writef("530 5.7.0 Authentication required")
-				break
-			}
+
 			if !gotFrom || len(to) == 0 {
 				s.writef("503 5.5.1 Bad sequence of commands (MAIL & RCPT required before DATA)")
 				break
@@ -451,69 +432,16 @@ loop:
 			to = nil
 			buffer.Reset()
 		case "AUTH":
-			if s.srv.TLSConfig != nil && s.srv.TLSRequired && !s.tls {
-				s.writef("530 5.7.0 Must issue a STARTTLS command first")
-				break
-			}
-			// Handle case where AUTH is requested but not configured (and therefore not listed as a service extension).
-			if s.srv.AuthHandler == nil {
-				s.writef("502 5.5.1 Command not implemented")
-				break
-			}
 
-			// Handle case where AUTH is received when already authenticated.
-			if s.authenticated {
-				s.writef("503 5.5.1 Bad sequence of commands (already authenticated for this session)")
-				break
-			}
-
-			// RFC 4954 specifies that AUTH is not permitted during mail transactions.
-			if gotFrom || len(to) > 0 {
-				s.writef("503 5.5.1 Bad sequence of commands (AUTH not permitted during mail transaction)")
-				break
-			}
-
-			// RFC 4954 requires a mechanism parameter.
-			authType, authArgs := s.parseLine(args)
-			if authType == "" {
-				s.writef("501 5.5.4 Malformed AUTH input (argument required)")
-				break
-			}
-
-			// RFC 4954 requires rejecting unsupported authentication mechanisms with a 504 response.
-			allowedAuth := s.authMechs()
-			if allowed, found := allowedAuth[authType]; !found || !allowed {
-				s.writef("504 5.5.4 Unrecognized authentication type")
-				break
-			}
-
-			// RFC 4954 also specifies that ESMTP code 5.5.4 ("Invalid command arguments") should be returned
-			// when attempting to use an unsupported authentication type.
+			// RFC 4954 also specifies that ESMTP code 5.5.4 ("Invalid command arguments")
+			// should be returned when attempting to use an unsupported authentication type.
 			// Many servers return 5.7.4 ("Security features not supported") instead.
-			switch authType {
-			case "PLAIN":
-				s.authenticated, err = s.handleAuthPlain(authArgs)
-			case "LOGIN":
-				s.authenticated, err = s.handleAuthLogin(authArgs)
-			case "CRAM-MD5":
-				s.authenticated, err = s.handleAuthCramMD5()
-			}
+			// RFC 4954 specifies that AUTH is not permitted during mail transactions.
 
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.writef("421 4.4.2 %s %s ESMTP Service closing transmission channel after timeout exceeded", s.srv.Hostname, s.srv.Appname)
-					break loop
-				}
+			// None of this matters for us though, we don't use standard user/pass AUTH
+			s.writef("502 5.5.1 Command not implemented")
+			break
 
-				s.writef(err.Error())
-				break
-			}
-
-			if s.authenticated {
-				s.writef("235 2.7.0 Authentication successful")
-			} else {
-				s.writef("535 5.7.8 Authentication credentials invalid")
-			}
 		default:
 			// See RFC 5321 section 4.2.4 for usage of 500 & 502 response codes.
 			s.writef("500 5.5.2 Syntax error, command unrecognized")
@@ -624,22 +552,6 @@ func (s *session) makeHeaders(to []string) []byte {
 	return buffer.Bytes()
 }
 
-// Determine allowed authentication mechanisms.
-// RFC 4954 specifies that plaintext authentication mechanisms such as LOGIN and PLAIN require a TLS connection.
-// This can be explicitly overridden e.g. setting s.srv.AuthMechs["LOGIN"] = true.
-func (s *session) authMechs() (mechs map[string]bool) {
-	mechs = map[string]bool{"LOGIN": s.tls, "PLAIN": s.tls, "CRAM-MD5": true}
-
-	for mech := range mechs {
-		allowed, found := s.srv.AuthMechs[mech]
-		if found {
-			mechs[mech] = allowed
-		}
-	}
-
-	return
-}
-
 // Create the greeting string sent in response to an EHLO command.
 func (s *session) makeEHLOResponse() (response string) {
 	response = fmt.Sprintf("250-%s greets %s\r\n", s.srv.Hostname, s.remoteName)
@@ -652,110 +564,6 @@ func (s *session) makeEHLOResponse() (response string) {
 		response += "250-STARTTLS\r\n"
 	}
 
-	// Only list AUTH if an AuthHandler is configured and at least one mechanism is allowed.
-	if s.srv.AuthHandler != nil {
-		var mechs []string
-		for mech, allowed := range s.authMechs() {
-			if allowed {
-				mechs = append(mechs, mech)
-			}
-		}
-		if len(mechs) > 0 {
-			response += "250-AUTH " + strings.Join(mechs, " ") + "\r\n"
-		}
-	}
-
 	response += "250 ENHANCEDSTATUSCODES"
 	return
-}
-
-func (s *session) handleAuthLogin(arg string) (bool, error) {
-	var err error
-
-	if arg == "" {
-		s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Username:")))
-		arg, err = s.readLine()
-		if err != nil {
-			return false, err
-		}
-	}
-
-	username, err := base64.StdEncoding.DecodeString(arg)
-	if err != nil {
-		return false, errors.New("501 5.5.2 Syntax error (unable to decode)")
-	}
-
-	s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Password:")))
-	line, err := s.readLine()
-	if err != nil {
-		return false, err
-	}
-
-	password, err := base64.StdEncoding.DecodeString(line)
-	if err != nil {
-		return false, errors.New("501 5.5.2 Syntax error (unable to decode)")
-	}
-
-	// Validate credentials.
-	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "LOGIN", username, password, nil)
-
-	return authenticated, err
-}
-
-func (s *session) handleAuthPlain(arg string) (bool, error) {
-	var err error
-
-	// If fast mode (AUTH PLAIN [arg]) is not used, prompt for credentials.
-	if arg == "" {
-		s.writef("334 ")
-		arg, err = s.readLine()
-		if err != nil {
-			return false, err
-		}
-	}
-
-	data, err := base64.StdEncoding.DecodeString(arg)
-	if err != nil {
-		return false, errors.New("501 5.5.2 Syntax error (unable to decode)")
-	}
-
-	parts := bytes.Split(data, []byte{0})
-	if len(parts) != 3 {
-		return false, errors.New("501 5.5.2 Syntax error (unable to parse)")
-	}
-
-	// Validate credentials.
-	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "PLAIN", parts[1], parts[2], nil)
-
-	return authenticated, err
-}
-
-func (s *session) handleAuthCramMD5() (bool, error) {
-	shared := "<" + strconv.Itoa(os.Getpid()) + "." + strconv.Itoa(time.Now().Nanosecond()) + "@" + s.srv.Hostname + ">"
-
-	s.writef("334 " + base64.StdEncoding.EncodeToString([]byte(shared)))
-
-	data, err := s.readLine()
-	if err != nil {
-		return false, err
-	}
-
-	if data == "*" {
-		return false, errors.New("501 5.7.0 Authentication cancelled")
-	}
-
-	buf, err := base64.StdEncoding.DecodeString(data)
-	if err != nil {
-		return false, errors.New("501 5.5.2 Syntax error (unable to decode)")
-	}
-
-	fields := strings.Split(string(buf), " ")
-	if len(fields) < 2 {
-		return false, errors.New("501 5.5.2 Syntax error (unable to parse)")
-	}
-
-	// Validate credentials.
-	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "CRAM-MD5", []byte(fields[0]), []byte(fields[1]), []byte(shared))
-
-	return authenticated, err
 }

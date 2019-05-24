@@ -1,8 +1,15 @@
 # smtpd
 
-An SMTP server package written in Go, in the style of the built-in HTTP server. It meets the minimum requirements specified by RFC 2821 & 5321.
+An SMTP server package written in Go, in the style of the built-in HTTP server. It meets the minimum requirements specified by RFC 2821 & 5321 minus AUTH support.
 
-It is based on [Brad Fitzpatrick's go-smtpd](https://github.com/bradfitz/go-smtpd). The differences can be summarised as:
+
+## History
+
+Xeoncross/smtpd is based on [Mark Hale's smtpd](https://github.com/mhale/smtpd). The differences can be summarised as:
+
+* Removed Authentication support
+
+mhale/smtpd is based on [Brad Fitzpatrick's go-smtpd](https://github.com/bradfitz/go-smtpd). The differences can be summarised as:
 
 * A simplified message handler
 * Changes made for RFC compliance
@@ -19,7 +26,6 @@ It is based on [Brad Fitzpatrick's go-smtpd](https://github.com/bradfitz/go-smtp
 * Customisable listening address and port. It defaults to listening on all addresses on port 25 if unset.
 * Customisable host name and application name. It defaults to the system hostname and "smtpd" application name if they are unset.
 * Easy to use TLS support that obeys RFC 3207.
-* Authentication support for the CRAM-MD5, LOGIN and PLAIN mechanisms that obeys RFC 4954.
 
 ## Usage
 
@@ -76,42 +82,6 @@ There is also a related package configuration option.
 * Debug
 
 This option determines if the data being read from or written to the client will be logged. This may help with debugging when using encrypted connections. The default is false.
-
-## Authentication Support
-
-The authentication support offers three mechanisms (CRAM-MD5, LOGIN and PLAIN) and has three server configuration options. The bare minimum requirement to enable authentication is to supply an authentication handler function as in the authentication example below.
-
-* AuthHandler
-
-This option provides an authentication handler function which is called to determine the validity of the supplied credentials.
-
-* AuthMechs
-
-This option allows the list of allowed authentication mechanisms to be explicitly set, overriding the default settings.
-
-* AuthRequired
-
-This option sets whether authentication is optional or required. If set to true, the only allowed commands are AUTH, EHLO, HELO, NOOP, RSET and QUIT (as specified in RFC 4954) until the session is authenticated. This option is ignored if authentication is not configured i.e. if AuthHandler is nil. The default is false.
-
-If both TLS and authentication are required, the TLS requirements take priority.
-
-### Notes
-
-RFC 4954 specifies that the LOGIN and PLAIN mechanisms require TLS to be in use as they send the password in plaintext. By default, smtpd follows this requirement, and will not advertise or allow LOGIN and PLAIN until a TLS connection is established. This behaviour can be overridden during testing by using the AuthMechs option. For example, to enable the PLAIN mechanism regardless of TLS:
-
-```go
-mechs := map[string]bool{"PLAIN": true}
-srv := &smtpd.Server{AuthMechs: mechs, ...}
-```
-
-The LOGIN and PLAIN mechanisms send the password to the server, but CRAM-MD5 does not - it sends a hash of the password, with a salt supplied by the server. In order to authenticate a session using CRAM-MD5, the server must have access to the plaintext password so it can hash it with the same salt and compare it to the hash sent by the client. If passwords are stored in a hashed format (and they should be), they cannot be transformed into plaintext, and therefore CRAM-MD5 cannot be used. To disable the CRAM-MD5 mechanism:
-
-```go
-mechs := map[string]bool{"CRAM-MD5": false}
-srv := &smtpd.Server{AuthMechs: mechs, ...}
-```
-
-The Go SMTP client cancels the authentication exchange by sending an asterisk to the server after a failed authentication attempt. The server will ignore this behaviour.
 
 ## Example
 
@@ -177,32 +147,6 @@ func ListenAndServe(addr string, handler smtpd.Handler, rcpt smtpd.HandlerRcpt) 
 
 ListenAndServe("127.0.0.1:2525", mailHandler, rcptHandler)
 ```
-
-## Authentication Example
-
-With the same ```mailHandler``` as above:
-
-```go
-func authHandler(remoteAddr net.Addr, mechanism string, username []byte, password []byte, shared []byte) (bool, error) {
-    return string(username) == "valid" && string(password) == "password", nil
-}
-
-func ListenAndServe(addr string, handler smtpd.Handler, authHandler smtpd.AuthHandler) error {
-    srv := &smtpd.Server{
-        Addr:        addr,
-        Handler:     handler,
-        Appname:     "MyServerApp",
-        Hostname:    "",
-        AuthHandler: authHandler,
-        AuthRequired: true,
-    }
-    return srv.ListenAndServe()
-}
-
-ListenAndServe("127.0.0.1:2525", mailHandler, authHandler)
-```
-
-This allows AUTH to be listed as a supported extension, CRAM-MD5 as a supported mechanism, and allows clients to authenticate by sending an AUTH command.
 
 ## Testing
 
