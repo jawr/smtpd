@@ -163,31 +163,55 @@ loop:
 			// data, err := s.readData()
 
 			// Status:
-			// So we are experimenting with replacing the .readData() loop with
-			// streaming support. It's working fine, but handling message size limits
-			// isn't working yet. Also, this needs to be moved to a property on the
-			// struct not here in line. Also update tests.
+			// Handling message size limits isn't fully(?) working yet. It doesn't
+			// seem right to be asking the handler to deal with checking the limit
+			// has not been reached yet.
+			//
+			// Move handler to property on Server struct
+			// Update tests.
+
+			// fmt.Println("(DATA stream starting...)")
+
+			r := s.text.DotReader()
+
+			// If a limit is set
+			if s.srv.MaxSize != 0 {
+				r = io.LimitReader(r, int64(s.srv.MaxSize))
+			}
 
 			// Streaming message read
-			err = mimestream.HandleEmailFromReader(s.text.DotReader(), func(h textproto.MIMEHeader, body io.Reader) (err error) {
-				fmt.Printf("%v\n", h)
-
-				// If a limit is set
-				if s.srv.MaxSize != 0 {
-					body = io.LimitReader(body, int64(s.srv.MaxSize))
-				}
+			err = mimestream.HandleEmailFromReader(r, func(h textproto.MIMEHeader, body io.Reader) (err error) {
 
 				var b []byte
 				b, err = ioutil.ReadAll(body)
 				if err != nil {
 					return
 				}
-				fmt.Printf("BODY: %q\n", b)
+
+				// Did we run out of bytes? (Should be moved inside the if err check)
+				if lr, ok := r.(*io.LimitedReader); ok {
+					fmt.Printf("LimitReader.N: %d with limit %d\n", lr.N, s.srv.MaxSize)
+					if lr.N >= int64(s.srv.MaxSize) {
+						return maxSizeExceeded(s.srv.MaxSize)
+					}
+				}
+
+				if Debug {
+					fmt.Printf("\nHEADER: %v\n", h)
+					fmt.Printf("BODY: %d %q\n", len(b), b)
+				}
 
 				return
 			})
 
 			if err != nil {
+				// if err == io.EOF {
+				// 	fmt.Printf("DATA EOF: %T: %v\n", err, err)
+				// 	// s.writef("451 4.3.0 Requested action aborted: local error in processing")
+				// 	s.writef("999 4.3.0 Requested action aborted: " + err.Error())
+				// 	break loop
+				// }
+
 				switch err.(type) {
 				case net.Error:
 					if err.(net.Error).Timeout() {
@@ -225,7 +249,7 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			buffer.Reset()
+			// buffer.Reset()
 		case "QUIT":
 			s.writef("221 2.0.0 %s %s ESMTP Service closing transmission channel", s.srv.Hostname, s.srv.Appname)
 			break loop
@@ -361,82 +385,40 @@ func (s *session) parseLine(line string) (verb string, args string) {
 	return verb, args
 }
 
-// Read the message data following a DATA command. (only used for tests)
-func (s *session) readData() ([]byte, error) {
-	var data []byte
-	for {
-		if s.srv.Timeout > 0 {
-			s.conn.SetReadDeadline(time.Now().Add(s.srv.Timeout))
-		}
-
-		line, err := s.br.ReadBytes('\n')
-		if err != nil {
-			return nil, err
-		}
-		// Handle end of data denoted by lone period (\r\n.\r\n)
-		if bytes.Equal(line, []byte(".\r\n")) {
-			break
-		}
-		// Remove leading period (RFC 5321 section 4.5.2)
-		if line[0] == '.' {
-			line = line[1:]
-		}
-
-		// Enforce the maximum message size limit.
-		if s.srv.MaxSize > 0 {
-			if len(data)+len(line) > s.srv.MaxSize {
-				_, _ = s.br.Discard(s.br.Buffered()) // Discard the buffer remnants.
-				return nil, maxSizeExceeded(s.srv.MaxSize)
-			}
-		}
-
-		data = append(data, line...)
-	}
-	return data, nil
-}
-
-// clientConn -> Session.Read() checking for errors AS HandleEmailFromReader(r io.Reader, h partHandler)
-// func (s *session) Read(p []byte) (n int, err error) {
+// (depreciated) Read the message data following a DATA command.
+// We don't buffer the whole body anymore like this.
+// Left for reference.
+// func (s *session) readData() ([]byte, error) {
+// 	var data []byte
+// 	for {
+// 		if s.srv.Timeout > 0 {
+// 			s.conn.SetReadDeadline(time.Now().Add(s.srv.Timeout))
+// 		}
 //
-// 	if s.srv.Timeout > 0 {
-// 		s.conn.SetReadDeadline(time.Now().Add(s.srv.Timeout))
+// 		line, err := s.br.ReadBytes('\n')
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		// Handle end of data denoted by lone period (\r\n.\r\n)
+// 		if bytes.Equal(line, []byte(".\r\n")) {
+// 			break
+// 		}
+// 		// Remove leading period (RFC 5321 section 4.5.2)
+// 		if line[0] == '.' {
+// 			line = line[1:]
+// 		}
+//
+// 		// Enforce the maximum message size limit.
+// 		if s.srv.MaxSize > 0 {
+// 			if len(data)+len(line) > s.srv.MaxSize {
+// 				_, _ = s.br.Discard(s.br.Buffered()) // Discard the buffer remnants.
+// 				return nil, maxSizeExceeded(s.srv.MaxSize)
+// 			}
+// 		}
+//
+// 		data = append(data, line...)
 // 	}
-//
-//   // s.conn.
-//
-//   text :=
-//
-//   text.DotReader()
-//
-//
-// 	b := make([]byte, len(p))
-// 	n, err = s.br.Read(b)
-//
-// 	fmt.Printf("READ(): %q\n", b)
-//
-// 	if err != nil {
-// 		return
-// 	}
-//
-// 	// Handle end of data denoted by lone period (\r\n.\r\n)
-// 	if bytes.Equal(b, []byte(".\r\n")) {
-// 		err = io.EOF
-// 	}
-// 	// Remove leading period (RFC 5321 section 4.5.2)
-// 	// if b[0] == '.' {
-// 	// 	b = b[1:]
-// 	// }
-//
-// 	// Enforce the maximum message size limit.
-// 	// if s.srv.MaxSize > 0 {
-// 	// 	if len(data)+len(line) > s.srv.MaxSize {
-// 	// 		_, _ = s.br.Discard(s.br.Buffered()) // Discard the buffer remnants.
-// 	// 		return nil, maxSizeExceeded(s.srv.MaxSize)
-// 	// 	}
-// 	// }
-//
-// 	copy(p, b)
-// 	return
+// 	return data, nil
 // }
 
 // Create the Received header to comply with RFC 2821 section 3.8.2.
