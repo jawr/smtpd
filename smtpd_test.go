@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// Required for MIME parsing
+var mimeHeaders = "Content-Type: text/plain\r\n\r\n"
+
 var cert = makeCertificate()
 
 // Create a client to run commands with. Parse the banner for 220 response.
@@ -40,7 +43,7 @@ func cmdCode(t *testing.T, conn net.Conn, cmd string, code string) string {
 		t.Fatalf("Failed to read response from test server: %v", err)
 	}
 	if resp[0:3] != code {
-		t.Errorf("Command \"%s\" response code is %s, want %s", cmd, resp[0:3], code)
+		t.Errorf("Command \"%q\"\n\tresponse code is %s\n\t%s\n\t, want %s", cmd, resp[0:3], resp, code)
 	}
 	return strings.TrimSpace(resp)
 }
@@ -227,14 +230,14 @@ func TestCmdDATA(t *testing.T) {
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
 	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, "Test message.\r\n.", "250")
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", "250")
 
 	// Test a full mail transaction with a bad last recipient.
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:", "501")
 	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, "Test message.\r\n.", "250")
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", "250")
 
 	cmdCode(t, conn, "QUIT", "221")
 	conn.Close()
@@ -249,19 +252,19 @@ func TestCmdDATAWithMaxSize(t *testing.T) {
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
 	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, "Test message\r\n.", "250")
+	cmdCode(t, conn, mimeHeaders+"Test message\r\n.", "250")
 
 	// Messages matching the maximum size should return 250 Ok
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
 	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, "Test message.\r\n.", "250")
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", "250")
 
 	// Messages above the maximum size should return a maximum size exceeded error.
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
 	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, "Test message that is too long.\r\n.", "552")
+	cmdCode(t, conn, mimeHeaders+"Test message that is too long.\r\n.", "552")
 
 	// Clients should send either RSET or QUIT after receiving 552 (RFC 1870 section 6.2).
 	cmdCode(t, conn, "RSET", "250")
@@ -270,7 +273,7 @@ func TestCmdDATAWithMaxSize(t *testing.T) {
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
 	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, "Test message.\r\nSecond line that is too long.\r\n.", "552")
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\nSecond line that is too long.\r\n.", "552")
 
 	// Clients should send either RSET or QUIT after receiving 552 (RFC 1870 section 6.2).
 	cmdCode(t, conn, "QUIT", "221")
@@ -525,19 +528,19 @@ func TestReadData(t *testing.T) {
 		data  string
 	}{
 		// Single line message.
-		{"Test message.\r\n.\r\n", "Test message.\r\n"},
+		{mimeHeaders + "Test message.\r\n.\r\n", mimeHeaders + "Test message.\r\n"},
 
 		// Single line message with leading period removed.
-		{".Test message.\r\n.\r\n", "Test message.\r\n"},
+		{mimeHeaders + ".Test message.\r\n.\r\n", mimeHeaders + "Test message.\r\n"},
 
 		// Multiple line message.
-		{"Line 1.\r\nLine 2.\r\nLine 3.\r\n.\r\n", "Line 1.\r\nLine 2.\r\nLine 3.\r\n"},
+		{mimeHeaders + "Line 1.\r\nLine 2.\r\nLine 3.\r\n.\r\n", mimeHeaders + "Line 1.\r\nLine 2.\r\nLine 3.\r\n"},
 
 		// Multiple line message with leading period removed.
-		{"Line 1.\r\n.Line 2.\r\nLine 3.\r\n.\r\n", "Line 1.\r\nLine 2.\r\nLine 3.\r\n"},
+		{mimeHeaders + "Line 1.\r\n.Line 2.\r\nLine 3.\r\n.\r\n", mimeHeaders + "Line 1.\r\nLine 2.\r\nLine 3.\r\n"},
 
 		// Multiple line message with one leading period removed.
-		{"Line 1.\r\n..Line 2.\r\nLine 3.\r\n.\r\n", "Line 1.\r\n.Line 2.\r\nLine 3.\r\n"},
+		{mimeHeaders + "Line 1.\r\n..Line 2.\r\nLine 3.\r\n.\r\n", mimeHeaders + "Line 1.\r\n.Line 2.\r\nLine 3.\r\n"},
 	}
 	var buf bytes.Buffer
 	s := &session{}
@@ -569,16 +572,16 @@ func TestReadDataWithMaxSize(t *testing.T) {
 		err     error
 	}{
 		// Maximum size of zero (the default) should not return an error.
-		{"Test message.\r\n.\r\n", 0, nil},
+		{mimeHeaders + "Test message.\r\n.\r\n", 0, nil},
 
 		// Messages below the maximum size should not return an error.
-		{"Test message.\r\n.\r\n", 16, nil},
+		{mimeHeaders + "Test message.\r\n.\r\n", 16, nil},
 
 		// Messages matching the maximum size should not return an error.
-		{"Test message.\r\n.\r\n", 15, nil},
+		{mimeHeaders + "From: a@example.com\r\n\r\nTest message.\r\n.\r\n", 15, nil},
 
 		// Messages above the maximum size should return a maximum size exceeded error.
-		{"Test message.\r\n.\r\n", 14, maxSizeExceeded(14)},
+		{mimeHeaders + "From: a@example.com\r\n\r\nTest message.\r\n.\r\n", 14, maxSizeExceeded(14)},
 	}
 	var buf bytes.Buffer
 	s := &session{}

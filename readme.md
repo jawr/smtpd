@@ -9,6 +9,11 @@ Xeoncross/smtpd is based on [Mark Hale's smtpd](https://github.com/mhale/smtpd).
 
 * Removed Authentication support
 
+TODO
+
+- validate MIME headers: https://github.com/emersion/maddy/blob/master/submission.go
+
+
 mhale/smtpd is based on [Brad Fitzpatrick's go-smtpd](https://github.com/bradfitz/go-smtpd). The differences can be summarised as:
 
 * A simplified message handler
