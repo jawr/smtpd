@@ -4,10 +4,7 @@ import (
 	"io"
 )
 
-// This class wraps the net.Conn ReadWriteCloser to throw an error if the client
-// sends an DATA body larger than allowed. This is wrapped by textproto,
-// multipart, and possibily other structs higher up. That means we can't use
-// maxSizeExceededError because it would just be burried.
+// Wraps by textproto.DotReader when reading the DATA body
 
 type MaxReader struct {
 	Reader    io.Reader
