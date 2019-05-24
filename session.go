@@ -2,7 +2,6 @@ package smtpd
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -23,7 +22,6 @@ type session struct {
 	br   *bufio.Reader
 	bw   *bufio.Writer
 	text *textproto.Conn
-	lr   *LimitReadWriteCloser
 
 	remoteIP   string // Remote IP address
 	remoteHost string // Remote hostname according to reverse DNS lookup
@@ -37,7 +35,7 @@ func (s *session) serve() {
 	var from string
 	var gotFrom bool
 	var to []string
-	var buffer bytes.Buffer
+	// var buffer bytes.Buffer
 
 	// Send banner.
 	s.writef("220 %s %s ESMTP Service ready", s.srv.Hostname, s.srv.Appname)
@@ -65,7 +63,7 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			buffer.Reset()
+			// buffer.Reset()
 		case "EHLO":
 			s.remoteName = args
 			s.writef(s.makeEHLOResponse())
@@ -74,7 +72,7 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			buffer.Reset()
+			// buffer.Reset()
 		case "MAIL":
 			if s.srv.TLSConfig != nil && s.srv.TLSRequired && !s.tls {
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
@@ -111,7 +109,7 @@ loop:
 				}
 			}
 			to = nil
-			buffer.Reset()
+			// buffer.Reset()
 		case "RCPT":
 			if s.srv.TLSConfig != nil && s.srv.TLSRequired && !s.tls {
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
@@ -157,64 +155,47 @@ loop:
 
 			s.writef("354 Start mail input; end with <CR><LF>.<CR><LF>")
 
-			// Attempt to read message body from the socket.
-			// On timeout, send a timeout message and return from serve().
-			// On net.Error, assume the client has gone away i.e. return from serve().
-			// On other errors, allow the client to try again.
-			// data, err := s.readData()
-
-			// Status:
-			// Handling message size limits isn't fully(?) working yet. It doesn't
-			// seem right to be asking the handler to deal with checking the limit
-			// has not been reached yet.
-			//
-			// Move handler to property on Server struct
-			// Update tests.
-
-			// fmt.Println("(DATA stream starting...)")
-
 			r := s.text.DotReader()
 
 			// If a limit is set
-			// if s.srv.MaxSize != 0 {
-			// 	r = io.LimitReader(r, int64(s.srv.MaxSize))
-			// }
+			if s.srv.MaxSize != 0 {
+				r = &MaxReader{Reader: r, MaxBytes: s.srv.MaxSize}
+			}
 
 			// Streaming message read
+			// Move handler to property on Server struct
+			// Update tests.
+
+			// Pass mail on to handler.
+			// if s.srv.Handler != nil {
+			// 	go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
+			// }
+
+			// Create Received header & write message body into buffer.
+			// buffer.Write(s.makeHeaders(to))
+
 			err = mimestream.HandleEmailFromReader(r, func(h textproto.MIMEHeader, body io.Reader) (err error) {
 
 				var b []byte
 				b, err = ioutil.ReadAll(body)
-				if err != nil {
-					fmt.Printf("ioutil.ReadAll: %v\n", err)
-					return
-				}
 
 				if Debug {
-					fmt.Printf("\nLimitReadWriteCloser Read: %d with limit %d\n", s.lr.BytesRead, s.srv.MaxSize)
+					if mr, ok := r.(*MaxReader); ok {
+						fmt.Printf("\nMaxReader Read: %d with limit %d\n", mr.BytesRead, s.srv.MaxSize)
+					}
 					fmt.Printf("HEADER: %v\n", h)
 					fmt.Printf("BODY: %d %q\n", len(b), b)
 				}
 
-				// Did we run out of bytes? (Should be moved inside the if err check)
-				// if lr, ok := r.(*io.LimitedReader); ok {
-				// 	fmt.Printf("LimitReader.N: %d with limit %d\n", lr.N, s.srv.MaxSize)
-				// 	if lr.N == 0 {
-				// 		fmt.Println("read too far...")
-				// 		return maxSizeExceeded(s.srv.MaxSize)
-				// 	}
-				// }
+				if err != nil {
+					return
+				}
 
 				return
 			})
 
 			if err != nil {
-				// if err == io.EOF {
-				// 	fmt.Printf("DATA EOF: %T: %v\n", err, err)
-				// 	// s.writef("451 4.3.0 Requested action aborted: local error in processing")
-				// 	s.writef("999 4.3.0 Requested action aborted: " + err.Error())
-				// 	break loop
-				// }
+				// fmt.Printf("DATA ERROR: %T: %v\n", err, err)
 
 				switch err.(type) {
 				case net.Error:
@@ -223,38 +204,21 @@ loop:
 					}
 					break loop
 				case maxSizeExceededError:
-					fmt.Println(err)
 					s.writef(err.Error())
 					continue
-				// case textproto.ProtocolError:
-				// 	// case mime.ErrInvalidMediaParameter:
-				// 	fmt.Printf("textproto.ProtocolError: %T: %v\n", err, err)
-				// 	s.writef("451 4.3.0 Requested action aborted: " + err.Error())
-				// 	continue
 				default:
-					fmt.Printf("DATA ERROR: %T: %v\n", err, err)
 					// s.writef("451 4.3.0 Requested action aborted: local error in processing")
 					s.writef("451 4.3.0 Requested action aborted: " + err.Error())
 					continue
 				}
 			}
 
-			// Create Received header & write message body into buffer.
-			// buffer.Reset()
-			// buffer.Write(s.makeHeaders(to))
-			// buffer.Write(data)
 			s.writef("250 2.0.0 Ok: queued")
-
-			// Pass mail on to handler.
-			// if s.srv.Handler != nil {
-			// 	go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
-			// }
 
 			// Reset for next mail.
 			from = ""
 			gotFrom = false
 			to = nil
-			// buffer.Reset()
 		case "QUIT":
 			s.writef("221 2.0.0 %s %s ESMTP Service closing transmission channel", s.srv.Hostname, s.srv.Appname)
 			break loop
@@ -267,7 +231,7 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			buffer.Reset()
+			// buffer.Reset()
 		case "NOOP":
 			s.writef("250 2.0.0 Ok")
 		case "HELP", "VRFY", "EXPN":
@@ -313,7 +277,7 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			buffer.Reset()
+			// buffer.Reset()
 		case "AUTH":
 
 			// RFC 4954 also specifies that ESMTP code 5.5.4 ("Invalid command arguments")
@@ -428,14 +392,14 @@ func (s *session) parseLine(line string) (verb string, args string) {
 
 // Create the Received header to comply with RFC 2821 section 3.8.2.
 // TODO: Work out what to do with multiple to addresses.
-func (s *session) makeHeaders(to []string) []byte {
-	var buffer bytes.Buffer
-	now := time.Now().Format("Mon, _2 Jan 2006 15:04:05 -0700 (MST)")
-	buffer.WriteString(fmt.Sprintf("Received: from %s (%s [%s])\r\n", s.remoteName, s.remoteHost, s.remoteIP))
-	buffer.WriteString(fmt.Sprintf("        by %s (%s) with SMTP\r\n", s.srv.Hostname, s.srv.Appname))
-	buffer.WriteString(fmt.Sprintf("        for <%s>; %s\r\n", to[0], now))
-	return buffer.Bytes()
-}
+// func (s *session) makeHeaders(to []string) []byte {
+// 	var buffer bytes.Buffer
+// 	now := time.Now().Format("Mon, _2 Jan 2006 15:04:05 -0700 (MST)")
+// 	buffer.WriteString(fmt.Sprintf("Received: from %s (%s [%s])\r\n", s.remoteName, s.remoteHost, s.remoteIP))
+// 	buffer.WriteString(fmt.Sprintf("        by %s (%s) with SMTP\r\n", s.srv.Hostname, s.srv.Appname))
+// 	buffer.WriteString(fmt.Sprintf("        for <%s>; %s\r\n", to[0], now))
+// 	return buffer.Bytes()
+// }
 
 // Create the greeting string sent in response to an EHLO command.
 func (s *session) makeEHLOResponse() (response string) {
