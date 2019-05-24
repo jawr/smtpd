@@ -23,6 +23,7 @@ type session struct {
 	br   *bufio.Reader
 	bw   *bufio.Writer
 	text *textproto.Conn
+	lr   *LimitReadWriteCloser
 
 	remoteIP   string // Remote IP address
 	remoteHost string // Remote hostname according to reverse DNS lookup
@@ -175,9 +176,9 @@ loop:
 			r := s.text.DotReader()
 
 			// If a limit is set
-			if s.srv.MaxSize != 0 {
-				r = io.LimitReader(r, int64(s.srv.MaxSize))
-			}
+			// if s.srv.MaxSize != 0 {
+			// 	r = io.LimitReader(r, int64(s.srv.MaxSize))
+			// }
 
 			// Streaming message read
 			err = mimestream.HandleEmailFromReader(r, func(h textproto.MIMEHeader, body io.Reader) (err error) {
@@ -185,21 +186,24 @@ loop:
 				var b []byte
 				b, err = ioutil.ReadAll(body)
 				if err != nil {
+					fmt.Printf("ioutil.ReadAll: %v\n", err)
 					return
 				}
 
-				// Did we run out of bytes? (Should be moved inside the if err check)
-				if lr, ok := r.(*io.LimitedReader); ok {
-					fmt.Printf("LimitReader.N: %d with limit %d\n", lr.N, s.srv.MaxSize)
-					if lr.N >= int64(s.srv.MaxSize) {
-						return maxSizeExceeded(s.srv.MaxSize)
-					}
-				}
-
 				if Debug {
-					fmt.Printf("\nHEADER: %v\n", h)
+					fmt.Printf("\nLimitReadWriteCloser Read: %d with limit %d\n", s.lr.BytesRead, s.srv.MaxSize)
+					fmt.Printf("HEADER: %v\n", h)
 					fmt.Printf("BODY: %d %q\n", len(b), b)
 				}
+
+				// Did we run out of bytes? (Should be moved inside the if err check)
+				// if lr, ok := r.(*io.LimitedReader); ok {
+				// 	fmt.Printf("LimitReader.N: %d with limit %d\n", lr.N, s.srv.MaxSize)
+				// 	if lr.N == 0 {
+				// 		fmt.Println("read too far...")
+				// 		return maxSizeExceeded(s.srv.MaxSize)
+				// 	}
+				// }
 
 				return
 			})
@@ -219,6 +223,7 @@ loop:
 					}
 					break loop
 				case maxSizeExceededError:
+					fmt.Println(err)
 					s.writef(err.Error())
 					continue
 				// case textproto.ProtocolError:

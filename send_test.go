@@ -40,6 +40,7 @@ func TestMultipartSend(t *testing.T) {
 	}
 
 	server := &Server{
+		MaxSize: 100000,
 		Handler: func(remoteAddr net.Addr, from string, to []string, data []byte) {
 			fmt.Printf("Received mail from %s to %s\n", from, to)
 			// fmt.Printf("%s\n\n", string(data))

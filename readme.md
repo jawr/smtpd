@@ -13,6 +13,7 @@ Xeoncross/smtpd is based on [Mark Hale's smtpd](https://github.com/mhale/smtpd).
 In progress:
 
 * Limit body size: https://github.com/Xeoncross/smtpd/blob/30a8d52d863ab51c35ddcc68a4aec614e6563de2/session.go#L165-L205
+    * Trying to use io.LimitReader combined with mime/multipart (Parsing) & textproto (DotReader) has proven to be a challenge. Wrapping the net.Conn on session creation means we can't reset the counter.
 
 TODO:
 

@@ -174,12 +174,18 @@ func (srv *Server) Serve(ln net.Listener) error {
 
 // Create new session from connection.
 func (srv *Server) newSession(conn net.Conn) (s *session) {
+
+	// Actually, this won't work because a session can be reused and this
+	// keeps counting for each DATA body!
+	limiter := &LimitReadWriteCloser{Reader: conn, MaxBytes: srv.MaxSize}
+
 	s = &session{
 		srv:  srv,
 		conn: conn,
 		br:   bufio.NewReader(conn),
 		bw:   bufio.NewWriter(conn),
-		text: textproto.NewConn(conn), // Catch/remove the ending DATA ".\r\n"
+		text: textproto.NewConn(limiter), // Catch/remove the ending DATA ".\r\n"
+		lr:   limiter,                    // this is just here for debugging
 	}
 
 	// Get remote end info for the Received header.
