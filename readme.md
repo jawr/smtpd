@@ -8,11 +8,17 @@ An SMTP server package written in Go, in the style of the built-in HTTP server. 
 Xeoncross/smtpd is based on [Mark Hale's smtpd](https://github.com/mhale/smtpd). The differences can be summarised as:
 
 * Removed Authentication support
+* Added streaming message processing via https://github.com/Xeoncross/mimestream
 
-TODO
+In progress:
 
-- validate MIME headers: https://github.com/emersion/maddy/blob/master/submission.go
+* Limit body size: https://github.com/Xeoncross/smtpd/blob/30a8d52d863ab51c35ddcc68a4aec614e6563de2/session.go#L165-L205
 
+TODO:
+
+* validation for MIME headers: https://github.com/emersion/maddy/blob/master/submission.go
+
+---
 
 mhale/smtpd is based on [Brad Fitzpatrick's go-smtpd](https://github.com/bradfitz/go-smtpd). The differences can be summarised as:
 
