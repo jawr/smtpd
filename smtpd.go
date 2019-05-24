@@ -307,6 +307,7 @@ loop:
 				s.writef("501 5.5.4 Syntax error in parameters or arguments (invalid TO parameter)")
 			} else {
 				// RFC 5321 specifies 100 minimum recipients
+				// https://tools.ietf.org/html/rfc5321#section-4.5.3.1.10
 				if len(to) == 100 {
 					s.writef("452 4.5.3 Too many recipients")
 				} else {
