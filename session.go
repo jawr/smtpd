@@ -192,8 +192,6 @@ loop:
 			})
 
 			if err != nil {
-				// fmt.Printf("DATA ERROR: %T: %v\n", err, err)
-
 				switch err.(type) {
 				case net.Error:
 					if err.(net.Error).Timeout() {
@@ -348,42 +346,6 @@ func (s *session) parseLine(line string) (verb string, args string) {
 	}
 	return verb, args
 }
-
-// (depreciated) Read the message data following a DATA command.
-// We don't buffer the whole body anymore like this.
-// Left for reference.
-// func (s *session) readData() ([]byte, error) {
-// 	var data []byte
-// 	for {
-// 		if s.srv.Timeout > 0 {
-// 			s.conn.SetReadDeadline(time.Now().Add(s.srv.Timeout))
-// 		}
-//
-// 		line, err := s.br.ReadBytes('\n')
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		// Handle end of data denoted by lone period (\r\n.\r\n)
-// 		if bytes.Equal(line, []byte(".\r\n")) {
-// 			break
-// 		}
-// 		// Remove leading period (RFC 5321 section 4.5.2)
-// 		if line[0] == '.' {
-// 			line = line[1:]
-// 		}
-//
-// 		// Enforce the maximum message size limit.
-// 		if s.srv.MaxSize > 0 {
-// 			if len(data)+len(line) > s.srv.MaxSize {
-// 				_, _ = s.br.Discard(s.br.Buffered()) // Discard the buffer remnants.
-// 				return nil, maxSizeExceeded(s.srv.MaxSize)
-// 			}
-// 		}
-//
-// 		data = append(data, line...)
-// 	}
-// 	return data, nil
-// }
 
 // Create the Received header to comply with RFC 2821 section 3.8.2.
 // TODO: Work out what to do with multiple to addresses.
