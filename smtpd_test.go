@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 // Required for MIME parsing
@@ -42,63 +44,61 @@ func newConn(t *testing.T, server *Server) net.Conn {
 	return clientConn
 }
 
-// Send a command and verify the 3 digit code from the response.
-func cmdCode(t *testing.T, conn net.Conn, cmd string, code string) string {
-	fmt.Fprintf(conn, "%s\r\n", cmd)
-
-	resp, err := textproto.NewConn(conn).ReadLine()
-	// resp, err := bufio.NewReader(conn).ReadString('\n')
-
-	if err != nil {
-		t.Fatalf("Failed to read response from test server: %v", err)
-	}
-	if resp[0:3] != code {
-		t.Errorf("Command \"%q\" response code is %s, want %s", cmd, resp[0:3], code)
-		// t.Errorf("Command \"%q\"\n\tresponse code is %s\n\t%s\t, want %s", cmd, resp[0:3], resp, code)
-	}
-	return strings.TrimSpace(resp)
-}
-
 // Simple wrapper to send and receive command and response
-func writeAndExpect(conn net.Conn, send string, code int) (err error) {
+func writeAndExpect(conn net.Conn, send string, code int) (msg string, err error) {
 	err = textproto.NewConn(conn).PrintfLine(send)
 	if err != nil {
 		return
 	}
 
-	var msg string
 	// Response is one-or-more lines
-	// _, _, err = textproto.NewConn(conn).ReadCodeLine(code)
-	code, msg, err = textproto.NewConn(conn).ReadResponse(code)
+	// _, msg, err = textproto.NewConn(conn).ReadCodeLine(code)
+	_, msg, err = textproto.NewConn(conn).ReadResponse(code)
 
-	fmt.Println("C:", send)
-	fmt.Println("S:", code, msg)
+	if err != nil {
+		err = errors.Wrap(err, fmt.Sprintf("sent: %q: want: %d, got", send, code))
+	}
 
 	return
+}
+
+// Send a command and verify the 3 digit code from the response.
+func cmdCode(t *testing.T, conn net.Conn, cmd string, code int) string {
+	msg, err := writeAndExpect(conn, cmd, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return msg
 }
 
 // Simple tests: connect, send command, then send QUIT.
 // RFC 2821 section 4.1.4 specifies that these commands do not require a prior EHLO,
 // only that clients should send one, so test without EHLO.
 func TestSimpleCommands(t *testing.T) {
+	var err error
 	tests := []struct {
 		cmd  string
-		code string
+		code int
 	}{
-		{"NOOP", "250"},
-		{"RSET", "250"},
-		{"HELP", "502"},
-		{"VRFY", "502"},
-		{"EXPN", "502"},
-		{"TEST", "500"}, // Unsupported command
-		{"", "500"},     // Blank command
+		{"NOOP", 250},
+		{"RSET", 250},
+		{"HELP", 502},
+		{"VRFY", 502},
+		{"EXPN", 502},
+		{"TEST", 500}, // Unsupported command
+		{"", 500},     // Blank command
 	}
 
 	for _, tt := range tests {
 		conn := newConn(t, &Server{})
-		// writeAndExpect(conn, tt.cmd, tt.code)
-		cmdCode(t, conn, tt.cmd, tt.code)
-		cmdCode(t, conn, "QUIT", "221")
+		_, err = writeAndExpect(conn, tt.cmd, tt.code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = writeAndExpect(conn, "QUIT", 221)
+		if err != nil {
+			t.Fatal(err)
+		}
 		conn.Close()
 	}
 }
@@ -107,16 +107,16 @@ func TestCmdHELO(t *testing.T) {
 	conn := newConn(t, &Server{})
 
 	// Send HELO, expect greeting.
-	cmdCode(t, conn, "HELO host.example.com", "250")
+	cmdCode(t, conn, "HELO host.example.com", 250)
 
 	// Verify that HELO resets the current transaction state like RSET.
 	// RFC 2821 section 4.1.4 says EHLO should cause a reset, so verify that HELO does it too.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "HELO host.example.com", "250")
-	cmdCode(t, conn, "DATA", "503")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "HELO host.example.com", 250)
+	cmdCode(t, conn, "DATA", 503)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
@@ -124,152 +124,152 @@ func TestCmdEHLO(t *testing.T) {
 	conn := newConn(t, &Server{})
 
 	// Send EHLO, expect greeting.
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// Verify that EHLO resets the current transaction state like RSET.
 	// See RFC 2821 section 4.1.4 for more detail.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "EHLO host.example.com", "250")
-	cmdCode(t, conn, "DATA", "503")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "EHLO host.example.com", 250)
+	cmdCode(t, conn, "DATA", 503)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
 func TestCmdRSET(t *testing.T) {
 	conn := newConn(t, &Server{})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// Verify that RSET clears the current transaction state.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "RSET", "250")
-	cmdCode(t, conn, "DATA", "503")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "RSET", 250)
+	cmdCode(t, conn, "DATA", 503)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
 func TestCmdMAIL(t *testing.T) {
 	conn := newConn(t, &Server{})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// MAIL with no FROM arg should return 501 syntax error
-	cmdCode(t, conn, "MAIL", "501")
+	cmdCode(t, conn, "MAIL", 501)
 	// MAIL with empty FROM arg should return 501 syntax error
-	cmdCode(t, conn, "MAIL FROM:", "501")
+	cmdCode(t, conn, "MAIL FROM:", 501)
 	// MAIL with DSN-style FROM arg should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<>", "250")
+	cmdCode(t, conn, "MAIL FROM:<>", 250)
 	// MAIL with valid FROM arg should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
 
 	// MAIL with valid SIZE parameter should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=1000", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=1000", 250)
 
 	// MAIL with bad size parameter should return 501 syntax error
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE", "501")
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=", "501")
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE= ", "501")
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=foo", "501")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE", 501)
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=", 501)
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE= ", 501)
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=foo", 501)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
 func TestCmdMAILMaxSize(t *testing.T) {
 	maxSize := 10 + time.Now().Minute()
 	conn := newConn(t, &Server{MaxSize: maxSize})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// MAIL with no size parameter should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
 
 	// MAIL with bad size parameter should return 501 syntax error
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE", "501")
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=", "501")
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE= ", "501")
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=foo", "501")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE", 501)
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=", 501)
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE= ", 501)
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=foo", 501)
 
 	// MAIL with size parameter zero should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=0", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com> SIZE=0", 250)
 
 	// MAIL below the maximum size should return 250 Ok
-	cmdCode(t, conn, fmt.Sprintf("MAIL FROM:<sender@example.com> SIZE=%d", maxSize-1), "250")
+	cmdCode(t, conn, fmt.Sprintf("MAIL FROM:<sender@example.com> SIZE=%d", maxSize-1), 250)
 
 	// MAIL matching the maximum size should return 250 Ok
-	cmdCode(t, conn, fmt.Sprintf("MAIL FROM:<sender@example.com> SIZE=%d", maxSize), "250")
+	cmdCode(t, conn, fmt.Sprintf("MAIL FROM:<sender@example.com> SIZE=%d", maxSize), 250)
 
 	// MAIL above the maximum size should return a maximum size exceeded error.
-	cmdCode(t, conn, fmt.Sprintf("MAIL FROM:<sender@example.com> SIZE=%d", maxSize+1), "552")
+	cmdCode(t, conn, fmt.Sprintf("MAIL FROM:<sender@example.com> SIZE=%d", maxSize+1), 552)
 
 	// Clients should send either RSET or QUIT after receiving 552 (RFC 1870 section 6.2).
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
 func TestCmdRCPT(t *testing.T) {
 	conn := newConn(t, &Server{})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// RCPT without prior MAIL should return 503 bad sequence
-	cmdCode(t, conn, "RCPT", "503")
+	cmdCode(t, conn, "RCPT", 503)
 
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
 
 	// RCPT with no TO arg should return 501 syntax error
-	cmdCode(t, conn, "RCPT", "501")
+	cmdCode(t, conn, "RCPT", 501)
 
 	// RCPT with empty TO arg should return 501 syntax error
-	cmdCode(t, conn, "RCPT TO:", "501")
+	cmdCode(t, conn, "RCPT TO:", 501)
 
 	// RCPT with valid TO arg should return 250 Ok
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
 
 	// Up to 100 valid recipients should return 250 Ok
 	for i := 2; i < 101; i++ {
-		cmdCode(t, conn, fmt.Sprintf("RCPT TO:<recipient%v@example.com>", i), "250")
+		cmdCode(t, conn, fmt.Sprintf("RCPT TO:<recipient%v@example.com>", i), 250)
 	}
 
 	// 101st valid recipient with valid TO arg should return 452 too many recipients
-	cmdCode(t, conn, "RCPT TO:<recipient101@example.com>", "452")
+	cmdCode(t, conn, "RCPT TO:<recipient101@example.com>", 452)
 
 	// RCPT with valid TO arg and prior DSN-style FROM arg should return 250 Ok
-	cmdCode(t, conn, "RSET", "250")
-	cmdCode(t, conn, "MAIL FROM:<>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
+	cmdCode(t, conn, "RSET", 250)
+	cmdCode(t, conn, "MAIL FROM:<>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
 func TestCmdDATA(t *testing.T) {
 	conn := newConn(t, &Server{})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// DATA without prior MAIL & RCPT should return 503 bad sequence
-	cmdCode(t, conn, "DATA", "503")
-	cmdCode(t, conn, "RSET", "250")
+	cmdCode(t, conn, "DATA", 503)
+	cmdCode(t, conn, "RSET", 250)
 
 	// DATA without prior RCPT should return 503 bad sequence
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "DATA", "503")
-	cmdCode(t, conn, "RSET", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "DATA", 503)
+	cmdCode(t, conn, "RSET", 250)
 
 	// Test a full mail transaction.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "DATA", 354)
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", 250)
 
 	// Test a full mail transaction with a bad last recipient.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:", "501")
-	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:", 501)
+	cmdCode(t, conn, "DATA", 354)
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", 250)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
@@ -277,55 +277,55 @@ func TestCmdDATAWithMaxSize(t *testing.T) {
 
 	// "Test message.\r\n." is 15 bytes after trailing period is removed.
 	conn := newConn(t, &Server{MaxSize: len(mimeHeaders) + 15})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// Messages below the maximum size should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, mimeHeaders+"Test message\r\n.", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "DATA", 354)
+	cmdCode(t, conn, mimeHeaders+"Test message\r\n.", 250)
 
 	// Messages matching the maximum size should return 250 Ok
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", "250")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "DATA", 354)
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", 250)
 
 	// Debug = true
 
 	// Messages above the maximum size should return a maximum size exceeded error.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, mimeHeaders+"Test message that is too long.\r\n.", "552")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "DATA", 354)
+	cmdCode(t, conn, mimeHeaders+"Test message that is too long.\r\n.", 552)
 
 	// Clients should send either RSET or QUIT after receiving 552 (RFC 1870 section 6.2).
-	cmdCode(t, conn, "RSET", "250")
+	cmdCode(t, conn, "RSET", 250)
 
 	// Messages above the maximum size should return a maximum size exceeded error.
-	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", "250")
-	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", "250")
-	cmdCode(t, conn, "DATA", "354")
-	cmdCode(t, conn, mimeHeaders+"Test message.\r\nSecond line that is too long.\r\n.", "552")
+	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
+	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
+	cmdCode(t, conn, "DATA", 354)
+	cmdCode(t, conn, mimeHeaders+"Test message.\r\nSecond line that is too long.\r\n.", 552)
 
 	// Debug = false
 
 	// Clients should send either RSET or QUIT after receiving 552 (RFC 1870 section 6.2).
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
 func TestCmdSTARTTLS(t *testing.T) {
 	conn := newConn(t, &Server{})
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// By default, TLS is not configured, so STARTTLS should return 502 not implemented.
-	cmdCode(t, conn, "STARTTLS", "502")
+	cmdCode(t, conn, "STARTTLS", 502)
 
 	// Parameters are not allowed (RFC 3207 section 4).
-	cmdCode(t, conn, "STARTTLS FOO", "501")
+	cmdCode(t, conn, "STARTTLS FOO", 501)
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	conn.Close()
 }
 
@@ -333,10 +333,10 @@ func TestCmdSTARTTLSFailure(t *testing.T) {
 	// Deliberately misconfigure TLS to force a handshake failure.
 	server := &Server{TLSConfig: &tls.Config{}}
 	conn := newConn(t, server)
-	cmdCode(t, conn, "EHLO host.example.com", "250")
+	cmdCode(t, conn, "EHLO host.example.com", 250)
 
 	// When TLS is configured, STARTTLS should return 220 Ready to start TLS.
-	cmdCode(t, conn, "STARTTLS", "220")
+	cmdCode(t, conn, "STARTTLS", 220)
 
 	// A failed TLS handshake should return 403 TLS handshake failed
 	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
@@ -354,7 +354,7 @@ func TestCmdSTARTTLSFailure(t *testing.T) {
 		t.Error("TLS handshake succeeded with empty tls.Config, want failure")
 	}
 
-	cmdCode(t, conn, "QUIT", "221")
+	cmdCode(t, conn, "QUIT", 221)
 	tlsConn.Close()
 }
 
@@ -425,15 +425,15 @@ func TestCmdSTARTTLSSuccess(t *testing.T) {
 
 	var err error
 
-	// cmdCode(t, conn, "EHLO host.example.com", "250")
-	err = writeAndExpect(conn, "EHLO host.example.com", 250)
+	// cmdCode(t, conn, "EHLO host.example.com", 250)
+	_, err = writeAndExpect(conn, "EHLO host.example.com", 250)
 	if err != nil {
 		t.Error(err)
 	}
 
 	// When TLS is configured, STARTTLS should return 220 Ready to start TLS.
-	// cmdCode(t, conn, "STARTTLS", "220")
-	err = writeAndExpect(conn, "STARTTLS", 220)
+	// cmdCode(t, conn, "STARTTLS", 220)
+	_, err = writeAndExpect(conn, "STARTTLS", 220)
 	if err != nil {
 		t.Error(err)
 	}
@@ -445,24 +445,19 @@ func TestCmdSTARTTLSSuccess(t *testing.T) {
 		t.Errorf("Failed to perform TLS handshake")
 	}
 
-	// textproto.newConn(tlsConn)
-
 	// The subsequent EHLO should be successful.
-	// cmdCode(t, tlsConn, "EHLO host.example.com", "250")
-	err = writeAndExpect(tlsConn, "EHLO host.example.com", 250)
+	_, err = writeAndExpect(tlsConn, "EHLO host.example.com", 250)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// When TLS is already in use, STARTTLS should return 503 bad sequence.
-	// cmdCode(t, tlsConn, "STARTTLS", "503")
-	err = writeAndExpect(tlsConn, "STARTTLS", 503)
+	_, err = writeAndExpect(tlsConn, "STARTTLS", 503)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// cmdCode(t, tlsConn, "QUIT", "221")
-	err = writeAndExpect(tlsConn, "QUIT", 221)
+	_, err = writeAndExpect(tlsConn, "QUIT", 221)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,18 +471,18 @@ func TestCmdSTARTTLSSuccess(t *testing.T) {
 // 		codeBefore string
 // 		codeAfter  string
 // 	}{
-// 		{"EHLO host.example.com", "250", "250"},
-// 		{"NOOP", "250", "250"},
-// 		{"MAIL FROM:<sender@example.com>", "530", "250"},
-// 		{"RCPT TO:<recipient@example.com>", "530", "250"},
-// 		{"RSET", "530", "250"}, // Reset before DATA to avoid having to actually send a message.
-// 		{"DATA", "530", "503"},
-// 		{"HELP", "502", "502"},
-// 		{"VRFY", "502", "502"},
-// 		{"EXPN", "502", "502"},
-// 		{"TEST", "500", "500"}, // Unsupported command
-// 		{"", "500", "500"},     // Blank command
-// 		{"AUTH", "502", "502"}, // AUTH is not supported
+// 		{"EHLO host.example.com", 250, 250},
+// 		{"NOOP", 250, 250},
+// 		{"MAIL FROM:<sender@example.com>", 530, 250},
+// 		{"RCPT TO:<recipient@example.com>", 530, 250},
+// 		{"RSET", 530, 250}, // Reset before DATA to avoid having to actually send a message.
+// 		{"DATA", 530, 503},
+// 		{"HELP", 502, 502},
+// 		{"VRFY", 502, 502},
+// 		{"EXPN", 502, 502},
+// 		{"TEST", 500, 500}, // Unsupported command
+// 		{"", 500, 500},     // Blank command
+// 		{"AUTH", 502, 502}, // AUTH is not supported
 // 	}
 //
 // 	// If TLS is not configured, the TLSRequired setting is ignored, so it must be configured for this test.
@@ -500,7 +495,7 @@ func TestCmdSTARTTLSSuccess(t *testing.T) {
 // 	}
 //
 // 	// Switch to using TLS.
-// 	cmdCode(t, conn, "STARTTLS", "220")
+// 	cmdCode(t, conn, "STARTTLS", 220)
 //
 // 	// A successful TLS handshake shouldn't return anything, it should wait for EHLO.
 // 	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
@@ -510,14 +505,14 @@ func TestCmdSTARTTLSSuccess(t *testing.T) {
 // 	}
 //
 // 	// The subsequent EHLO should be successful.
-// 	cmdCode(t, tlsConn, "EHLO host.example.com", "250")
+// 	cmdCode(t, tlsConn, "EHLO host.example.com", 250)
 //
 // 	// If TLS is required, and is in use, every command should work normally.
 // 	for _, tt := range tests {
 // 		cmdCode(t, tlsConn, tt.cmd, tt.codeAfter)
 // 	}
 //
-// 	cmdCode(t, tlsConn, "QUIT", "221")
+// 	cmdCode(t, tlsConn, "QUIT", 221)
 // 	tlsConn.Close()
 // }
 
@@ -556,31 +551,6 @@ func TestParseLine(t *testing.T) {
 		}
 	}
 }
-
-// Test reading of complete lines from the socket.
-// func TestReadLine(t *testing.T) {
-// 	var buf bytes.Buffer
-// 	s := &session{}
-// 	s.srv = &Server{}
-// 	s.br = bufio.NewReader(&buf)
-//
-// 	// Ensure readLine() returns an EOF error on an empty buffer.
-// 	_, err := s.readLine()
-// 	if err != io.EOF {
-// 		t.Errorf("readLine() on empty buffer returned err: %v, want EOF", err)
-// 	}
-//
-// 	// Ensure trailing <CRLF> is stripped.
-// 	line := "FOO BAR BAZ\r\n"
-// 	cmd := "FOO BAR BAZ"
-// 	buf.Write([]byte(line))
-// 	output, err := s.readLine()
-// 	if err != nil {
-// 		t.Errorf("readLine(%v) returned err: %v", line, err)
-// 	} else if output != cmd {
-// 		t.Errorf("readLine(%v) returned %v, want %v", line, output, cmd)
-// 	}
-// }
 
 // Test reading of message data, including dot stuffing (see RFC 5321 section 4.5.2).
 // func TestReadData(t *testing.T) {
@@ -864,28 +834,41 @@ func TestConfigureTLSWithPassphrase(t *testing.T) {
 // Benchmark the mail handling without the network stack introducing latency.
 func BenchmarkReceive(b *testing.B) {
 	server := &Server{} // Default server configuration.
-	clientConn, serverConn := net.Pipe()
-	session := server.newSession(serverConn)
-	go session.serve()
 
-	reader := bufio.NewReader(clientConn)
-	_, _ = reader.ReadString('\n') // Read greeting message first.
+	sendRecv := func(client *textproto.Conn, send string, code int) {
+		err := client.PrintfLine(send)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		_, _, err = client.ReadResponse(code)
+
+		if err != nil {
+			// err = errors.Wrap(err, fmt.Sprintf("sent: %q: want: %d, got", send, code))
+			b.Fatal(err)
+		}
+	}
 
 	b.ResetTimer()
 
 	// Benchmark a full mail transaction.
 	for i := 0; i < b.N; i++ {
-		fmt.Fprintf(clientConn, "%s\r\n", "HELO host.example.com")
-		_, _ = reader.ReadString('\n')
-		fmt.Fprintf(clientConn, "%s\r\n", "MAIL FROM:<sender@example.com>")
-		_, _ = reader.ReadString('\n')
-		fmt.Fprintf(clientConn, "%s\r\n", "RCPT TO:<recipient@example.com>")
-		_, _ = reader.ReadString('\n')
-		fmt.Fprintf(clientConn, "%s\r\n", "DATA")
-		_, _ = reader.ReadString('\n')
-		fmt.Fprintf(clientConn, "%s\r\n", "Test message.\r\n.")
-		_, _ = reader.ReadString('\n')
-		fmt.Fprintf(clientConn, "%s\r\n", "QUIT")
-		_, _ = reader.ReadString('\n')
+
+		clientConn, serverConn := net.Pipe()
+		session := server.newSession(serverConn)
+		go session.serve()
+
+		reader := textproto.NewConn(clientConn)
+		_, _ = reader.ReadLine() // Read greeting message first.
+
+		client := textproto.NewConn(clientConn)
+
+		sendRecv(client, "HELO host.example.com", 250)
+		sendRecv(client, "MAIL FROM:<sender@example.com>", 250)
+		sendRecv(client, "RCPT TO:<recipient@example.com>", 250)
+		sendRecv(client, "RCPT TO:", 501)
+		sendRecv(client, "DATA", 354)
+		sendRecv(client, mimeHeaders+"Test message.\r\n.", 250)
+		sendRecv(client, "QUIT", 221)
 	}
 }

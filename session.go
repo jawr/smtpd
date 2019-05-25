@@ -65,7 +65,6 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			// buffer.Reset()
 		case "EHLO":
 			s.remoteName = args
 			s.writef(s.makeEHLOResponse())
@@ -74,7 +73,6 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			// buffer.Reset()
 		case "MAIL":
 			if s.srv.TLSConfig != nil && s.srv.TLSRequired && !s.tls {
 				s.writef("530 5.7.0 Must issue a STARTTLS command first")
@@ -235,7 +233,6 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			// buffer.Reset()
 		case "NOOP":
 			s.writef("250 2.0.0 Ok")
 		case "HELP", "VRFY", "EXPN":
@@ -266,16 +263,13 @@ loop:
 			tlsConn := tls.Server(s.conn, s.srv.TLSConfig)
 			err := tlsConn.Handshake()
 			if err != nil {
-				fmt.Println(err)
 				s.writef("403 4.7.0 TLS handshake failed")
 				break
 			}
 
 			// TLS handshake succeeded, switch to using the TLS connection.
 			s.conn = tlsConn
-			// TODO old code reset the buffer here...
-			// s.br = bufio.NewReader(s.conn)
-			// s.bw = bufio.NewWriter(s.conn)
+			s.tpconn = textproto.NewConn(tlsConn)
 			s.tls = true
 
 			// RFC 3207 specifies that the server must discard any prior knowledge obtained from the client.
@@ -283,7 +277,6 @@ loop:
 			from = ""
 			gotFrom = false
 			to = nil
-			// buffer.Reset()
 		case "AUTH":
 
 			// RFC 4954 also specifies that ESMTP code 5.5.4 ("Invalid command arguments")
@@ -312,13 +305,6 @@ func (s *session) writef(format string, args ...interface{}) (err error) {
 	}
 
 	err = s.tpconn.Writer.PrintfLine(format, args...)
-
-	// w := s.tpconn.DotWriter()
-	// //
-	// line := fmt.Sprintf(format, args...)
-	// fmt.Fprintf(w, line+"\r\n")
-	// // // err := s.bw.Flush()
-	// err := w.Close()
 
 	if Debug {
 		line := fmt.Sprintf(format, args...)
