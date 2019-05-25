@@ -1,7 +1,6 @@
 package smtpd
 
 import (
-	"bufio"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -19,9 +18,11 @@ import (
 type session struct {
 	srv  *Server
 	conn net.Conn
-	br   *bufio.Reader
-	bw   *bufio.Writer
-	text *textproto.Conn
+	// br   *bufio.Reader
+	// bw   *bufio.Writer
+	tpconn *textproto.Conn
+	// reader *textproto.Reader
+	// writer *textproto.Writer
 
 	remoteIP   string // Remote IP address
 	remoteHost string // Remote hostname according to reverse DNS lookup
@@ -45,6 +46,7 @@ loop:
 		// Attempt to read a line from the socket.
 		// On timeout, send a timeout message and return from serve().
 		// On error, assume the client has gone away i.e. return from serve().
+
 		line, err := s.readLine()
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -155,7 +157,9 @@ loop:
 
 			s.writef("354 Start mail input; end with <CR><LF>.<CR><LF>")
 
-			r := s.text.DotReader()
+			// r := s.text.DotReader()
+			// r := textproto.NewReader(s.br).DotReader()
+			r := s.tpconn.DotReader()
 
 			// If a limit is set
 			if s.srv.MaxSize != 0 {
@@ -262,14 +266,16 @@ loop:
 			tlsConn := tls.Server(s.conn, s.srv.TLSConfig)
 			err := tlsConn.Handshake()
 			if err != nil {
+				fmt.Println(err)
 				s.writef("403 4.7.0 TLS handshake failed")
 				break
 			}
 
 			// TLS handshake succeeded, switch to using the TLS connection.
 			s.conn = tlsConn
-			s.br = bufio.NewReader(s.conn)
-			s.bw = bufio.NewWriter(s.conn)
+			// TODO old code reset the buffer here...
+			// s.br = bufio.NewReader(s.conn)
+			// s.bw = bufio.NewWriter(s.conn)
 			s.tls = true
 
 			// RFC 3207 specifies that the server must discard any prior knowledge obtained from the client.
@@ -297,16 +303,25 @@ loop:
 }
 
 // Wrapper function for writing a complete line to the socket.
-func (s *session) writef(format string, args ...interface{}) error {
+func (s *session) writef(format string, args ...interface{}) (err error) {
 	if s.srv.Timeout > 0 {
-		s.conn.SetWriteDeadline(time.Now().Add(s.srv.Timeout))
+		err = s.conn.SetWriteDeadline(time.Now().Add(s.srv.Timeout))
+		if err != nil {
+			return
+		}
 	}
 
-	line := fmt.Sprintf(format, args...)
-	fmt.Fprintf(s.bw, line+"\r\n")
-	err := s.bw.Flush()
+	err = s.tpconn.Writer.PrintfLine(format, args...)
+
+	// w := s.tpconn.DotWriter()
+	// //
+	// line := fmt.Sprintf(format, args...)
+	// fmt.Fprintf(w, line+"\r\n")
+	// // // err := s.bw.Flush()
+	// err := w.Close()
 
 	if Debug {
+		line := fmt.Sprintf(format, args...)
 		verb := "WROTE"
 		if s.srv.LogWrite != nil {
 			s.srv.LogWrite(s.remoteIP, verb, line)
@@ -315,20 +330,19 @@ func (s *session) writef(format string, args ...interface{}) error {
 		}
 	}
 
-	return err
+	return
 }
 
 // Read a complete line from the socket.
-func (s *session) readLine() (string, error) {
+func (s *session) readLine() (line string, err error) {
 	if s.srv.Timeout > 0 {
-		s.conn.SetReadDeadline(time.Now().Add(s.srv.Timeout))
+		err = s.conn.SetReadDeadline(time.Now().Add(s.srv.Timeout))
+		if err != nil {
+			return
+		}
 	}
 
-	line, err := s.br.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	line = strings.TrimSpace(line) // Strip trailing \r\n
+	line, err = s.tpconn.ReadLine()
 
 	if Debug {
 		verb := "READ"
@@ -339,7 +353,7 @@ func (s *session) readLine() (string, error) {
 		}
 	}
 
-	return line, err
+	return
 }
 
 // Parse a line read from the socket.

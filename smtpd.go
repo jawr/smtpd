@@ -2,7 +2,6 @@
 package smtpd
 
 import (
-	"bufio"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -17,7 +16,7 @@ import (
 
 var (
 	// Debug `true` enables verbose logging.
-	Debug      = false
+	Debug      = true
 	rcptToRE   = regexp.MustCompile(`[Tt][Oo]:<(.+)>`)
 	mailFromRE = regexp.MustCompile(`[Ff][Rr][Oo][Mm]:<(.*)>(\s(.*))?`) // Delivery Status Notifications are sent with "MAIL FROM:<>"
 	mailSizeRE = regexp.MustCompile(`[Ss][Ii][Zz][Ee]=(\d+)`)
@@ -167,6 +166,7 @@ func (srv *Server) Serve(ln net.Listener) error {
 			}
 			return err
 		}
+		// TODO request throttler
 		session := srv.newSession(conn)
 		go session.serve()
 	}
@@ -178,9 +178,14 @@ func (srv *Server) newSession(conn net.Conn) (s *session) {
 	s = &session{
 		srv:  srv,
 		conn: conn,
-		br:   bufio.NewReader(conn),
-		bw:   bufio.NewWriter(conn),
-		text: textproto.NewConn(conn), // Catch/remove the ending DATA ".\r\n"
+		// br:   bufio.NewReader(conn),
+		// bw:   bufio.NewWriter(conn),
+
+		// textproto is our gateway to DotReader/DotWriter for SMTP lines
+		// It can add/remove \r\n and the leading/ending DATA dot markers (.)
+		// https://golang.org/src/net/textproto/reader.go#L281
+		// https://golang.org/src/net/textproto/writer.go#L36
+		tpconn: textproto.NewConn(conn),
 	}
 
 	// Get remote end info for the Received header.

@@ -9,7 +9,7 @@ Xeoncross/smtpd is based on [Mark Hale's smtpd](https://github.com/mhale/smtpd).
 
 * Removed Authentication support
 * Added streaming message processing via https://github.com/Xeoncross/mimestream
-* Moved to textproto.DotReader instead of manual parsing of `.\r\n`
+* Moved to [textproto.DotReader](https://golang.org/src/net/textproto/reader.go#L281) instead of manual parsing of `.\r\n`
 
 TODO:
 
