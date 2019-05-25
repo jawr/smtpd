@@ -164,6 +164,17 @@ For the TLS, size and authentication tests, a different server is created with a
 
 The TLS and authentication support has also been manually tested with Go client code, Ruby client code, and macOS's Mail.app.
 
+## Benchmarks
+
+Server performs well handling 30,000 requests a second with tiny message bodies (not including real network overhead).
+
+    go test -bench=. --benchmem
+
+    goos: darwin
+    goarch: amd64
+    pkg: github.com/mhale/smtpd
+    BenchmarkReceive-8   	   30000	     55918 ns/op	   34528 B/op	      64 allocs/op
+
 ## Licensing
 
 Some of the code in this package was copied or adapted from code found in [Brad Fitzpatrick's go-smtpd](https://github.com/bradfitz/go-smtpd). As such, those sections of code are subject to their original copyright and license. The remaining code is in the public domain.

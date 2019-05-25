@@ -16,13 +16,9 @@ import (
 )
 
 type session struct {
-	srv  *Server
-	conn net.Conn
-	// br   *bufio.Reader
-	// bw   *bufio.Writer
+	srv    *Server
+	conn   net.Conn
 	tpconn *textproto.Conn
-	// reader *textproto.Reader
-	// writer *textproto.Writer
 
 	remoteIP   string // Remote IP address
 	remoteHost string // Remote hostname according to reverse DNS lookup
@@ -36,7 +32,6 @@ func (s *session) serve() {
 	var from string
 	var gotFrom bool
 	var to []string
-	// var buffer bytes.Buffer
 
 	// Send banner.
 	s.writef("220 %s %s ESMTP Service ready", s.srv.Hostname, s.srv.Appname)
@@ -155,8 +150,6 @@ loop:
 
 			s.writef("354 Start mail input; end with <CR><LF>.<CR><LF>")
 
-			// r := s.text.DotReader()
-			// r := textproto.NewReader(s.br).DotReader()
 			r := s.tpconn.DotReader()
 
 			// If a limit is set
@@ -164,36 +157,38 @@ loop:
 				r = &MaxReader{Reader: r, MaxBytes: s.srv.MaxSize}
 			}
 
-			// Streaming message read
-			// Move handler to property on Server struct
-			// Update tests.
-
-			// Pass mail on to handler.
-			// if s.srv.Handler != nil {
-			// 	go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
-			// }
-
 			// Create Received header & write message body into buffer.
 			// buffer.Write(s.makeHeaders(to))
 
-			err = mimestream.HandleEmailFromReader(r, func(h textproto.MIMEHeader, body io.Reader) (err error) {
+			err = mimestream.HandleEmailFromReader(r, func(header textproto.MIMEHeader, body io.Reader) error {
 
-				var b []byte
-				b, err = ioutil.ReadAll(body)
+				// Pass mail on to handler.
+				if s.srv.Handler != nil {
+					return s.srv.Handler(s.conn.RemoteAddr(), from, to, header, body)
+				}
 
 				if Debug {
+					var b []byte
+					b, err = ioutil.ReadAll(body)
+
 					if mr, ok := r.(*MaxReader); ok {
 						fmt.Printf("\nMaxReader Read: %d with limit %d\n", mr.BytesRead, s.srv.MaxSize)
 					}
-					fmt.Printf("HEADER: %v\n", h)
+					fmt.Printf("HEADER: %v\n", header)
 					fmt.Printf("BODY: %d %q\n", len(b), b)
+
+					if err != nil {
+						return err
+					}
+				} else {
+					// Ignore body
+					_, err = io.Copy(ioutil.Discard, body)
+					if err != nil {
+						return err
+					}
 				}
 
-				if err != nil {
-					return
-				}
-
-				return
+				return nil
 			})
 
 			if err != nil {

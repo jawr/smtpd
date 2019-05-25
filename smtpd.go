@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/textproto"
@@ -23,7 +24,7 @@ var (
 )
 
 // Handler function called upon successful receipt of an email.
-type Handler func(remoteAddr net.Addr, from string, to []string, data []byte)
+type Handler func(remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) error
 
 // HandlerRcpt function called on RCPT. Return accept status.
 type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
@@ -178,10 +179,8 @@ func (srv *Server) newSession(conn net.Conn) (s *session) {
 	s = &session{
 		srv:  srv,
 		conn: conn,
-		// br:   bufio.NewReader(conn),
-		// bw:   bufio.NewWriter(conn),
 
-		// textproto is our gateway to DotReader/DotWriter for SMTP lines
+		// textproto is our gateway to DotReader/DotWriter for SMTP lines.
 		// It can add/remove \r\n and the leading/ending DATA dot markers (.)
 		// https://golang.org/src/net/textproto/reader.go#L281
 		// https://golang.org/src/net/textproto/writer.go#L36
