@@ -291,8 +291,6 @@ func TestCmdDATAWithMaxSize(t *testing.T) {
 	cmdCode(t, conn, "DATA", 354)
 	cmdCode(t, conn, mimeHeaders+"Test message.\r\n.", 250)
 
-	// Debug = true
-
 	// Messages above the maximum size should return a maximum size exceeded error.
 	cmdCode(t, conn, "MAIL FROM:<sender@example.com>", 250)
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
@@ -307,8 +305,6 @@ func TestCmdDATAWithMaxSize(t *testing.T) {
 	cmdCode(t, conn, "RCPT TO:<recipient@example.com>", 250)
 	cmdCode(t, conn, "DATA", 354)
 	cmdCode(t, conn, mimeHeaders+"Test message.\r\nSecond line that is too long.\r\n.", 552)
-
-	// Debug = false
 
 	// Clients should send either RSET or QUIT after receiving 552 (RFC 1870 section 6.2).
 	cmdCode(t, conn, "QUIT", 221)
@@ -552,82 +548,6 @@ func TestParseLine(t *testing.T) {
 	}
 }
 
-// Test reading of message data, including dot stuffing (see RFC 5321 section 4.5.2).
-// func TestReadData(t *testing.T) {
-// 	tests := []struct {
-// 		lines string
-// 		data  string
-// 	}{
-// 		// Single line message.
-// 		{mimeHeaders + "Test message.\r\n.\r\n", mimeHeaders + "Test message.\r\n"},
-//
-// 		// Single line message with leading period removed.
-// 		{mimeHeaders + ".Test message.\r\n.\r\n", mimeHeaders + "Test message.\r\n"},
-//
-// 		// Multiple line message.
-// 		{mimeHeaders + "Line 1.\r\nLine 2.\r\nLine 3.\r\n.\r\n", mimeHeaders + "Line 1.\r\nLine 2.\r\nLine 3.\r\n"},
-//
-// 		// Multiple line message with leading period removed.
-// 		{mimeHeaders + "Line 1.\r\n.Line 2.\r\nLine 3.\r\n.\r\n", mimeHeaders + "Line 1.\r\nLine 2.\r\nLine 3.\r\n"},
-//
-// 		// Multiple line message with one leading period removed.
-// 		{mimeHeaders + "Line 1.\r\n..Line 2.\r\nLine 3.\r\n.\r\n", mimeHeaders + "Line 1.\r\n.Line 2.\r\nLine 3.\r\n"},
-// 	}
-// 	var buf bytes.Buffer
-// 	s := &session{}
-// 	s.srv = &Server{}
-// 	s.br = bufio.NewReader(&buf)
-//
-// 	// Ensure readData() returns an EOF error on an empty buffer.
-// 	_, err := s.readData()
-// 	if err != io.EOF {
-// 		t.Errorf("readData() on empty buffer returned err: %v, want EOF", err)
-// 	}
-//
-// 	for _, tt := range tests {
-// 		buf.Write([]byte(tt.lines))
-// 		data, err := s.readData()
-// 		if err != nil {
-// 			t.Errorf("readData(%v) returned err: %v", tt.lines, err)
-// 		} else if string(data) != tt.data {
-// 			t.Errorf("readData(%v) returned %v, want %v", tt.lines, string(data), tt.data)
-// 		}
-// 	}
-// }
-//
-// // Test reading of message data with maximum size set (see RFC 1870 section 6.3).
-// func TestReadDataWithMaxSize(t *testing.T) {
-// 	tests := []struct {
-// 		lines   string
-// 		maxSize int
-// 		err     error
-// 	}{
-// 		// Maximum size of zero (the default) should not return an error.
-// 		{mimeHeaders + "Test message.\r\n.\r\n", 0, nil},
-//
-// 		// Messages below the maximum size should not return an error.
-// 		{mimeHeaders + "Test message.\r\n.\r\n", len(mimeHeaders) + 16, nil},
-//
-// 		// Messages matching the maximum size should not return an error.
-// 		{mimeHeaders + "Test message.\r\n.\r\n", len(mimeHeaders) + 15, nil},
-//
-// 		// Messages above the maximum size should return a maximum size exceeded error.
-// 		{mimeHeaders + "From: a@example.com\r\n\r\nTest message.\r\n.\r\n", len(mimeHeaders) + 14, maxSizeExceeded(len(mimeHeaders) + 14)},
-// 	}
-// 	var buf bytes.Buffer
-// 	s := &session{}
-// 	s.br = bufio.NewReader(&buf)
-//
-// 	for _, tt := range tests {
-// 		s.srv = &Server{MaxSize: tt.maxSize}
-// 		buf.Write([]byte(tt.lines))
-// 		_, err := s.readData()
-// 		if err != tt.err {
-// 			t.Errorf("readData(%v) returned err: %v\n\tExpecting: %v", tt.lines, err, tt.err)
-// 		}
-// 	}
-// }
-
 // Utility function for parsing extensions listed as service extensions in response to an EHLO command.
 func parseExtensions(t *testing.T, greeting string) map[string]string {
 	extensions := make(map[string]string)
@@ -828,47 +748,5 @@ func TestConfigureTLSWithPassphrase(t *testing.T) {
 	}
 	if srv.TLSConfig == nil {
 		t.Errorf("Unexpected empty TLS config.")
-	}
-}
-
-// Benchmark the mail handling without the network stack introducing latency.
-func BenchmarkReceive(b *testing.B) {
-	server := &Server{} // Default server configuration.
-
-	sendRecv := func(client *textproto.Conn, send string, code int) {
-		err := client.PrintfLine(send)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		_, _, err = client.ReadResponse(code)
-
-		if err != nil {
-			// err = errors.Wrap(err, fmt.Sprintf("sent: %q: want: %d, got", send, code))
-			b.Fatal(err)
-		}
-	}
-
-	b.ResetTimer()
-
-	// Benchmark a full mail transaction.
-	for i := 0; i < b.N; i++ {
-
-		clientConn, serverConn := net.Pipe()
-		session := server.newSession(serverConn)
-		go session.serve()
-
-		reader := textproto.NewConn(clientConn)
-		_, _ = reader.ReadLine() // Read greeting message first.
-
-		client := textproto.NewConn(clientConn)
-
-		sendRecv(client, "HELO host.example.com", 250)
-		sendRecv(client, "MAIL FROM:<sender@example.com>", 250)
-		sendRecv(client, "RCPT TO:<recipient@example.com>", 250)
-		sendRecv(client, "RCPT TO:", 501)
-		sendRecv(client, "DATA", 354)
-		sendRecv(client, mimeHeaders+"Test message.\r\n.", 250)
-		sendRecv(client, "QUIT", 221)
 	}
 }

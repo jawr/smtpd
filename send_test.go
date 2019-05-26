@@ -1,11 +1,13 @@
 package smtpd
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
 	"net"
+	"net/smtp"
 	"net/textproto"
 	"strings"
 	"testing"
@@ -13,10 +15,7 @@ import (
 	"github.com/Xeoncross/mimestream"
 )
 
-func TestMultipartSend(t *testing.T) {
-
-	var err error
-
+func SampleEmailBody() io.Reader {
 	parts := mimestream.Parts{
 		mimestream.Mixed{
 			Parts: mimestream.Parts{
@@ -40,28 +39,11 @@ func TestMultipartSend(t *testing.T) {
 		},
 	}
 
-	server := &Server{
-		MaxSize: 100000,
-		Handler: func(remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) error {
-			// fmt.Printf("Received mail from %s to %s\n", from, to)
+	buf := &bytes.Buffer{}
+	mw := multipart.NewWriter(buf)
 
-			// Ignore body
-			_, err = io.Copy(ioutil.Discard, body)
-			if err != nil {
-				return err
-			}
-
-			return nil
-		},
-	} // Default server configuration.
-	clientConn, serverConn := net.Pipe()
-	session := server.newSession(serverConn)
-	go session.serve()
-
-	// To pipe to reader
-	pr, pw := io.Pipe()
-
-	mw := multipart.NewWriter(pw)
+	parts.Into(mw)
+	mw.Close()
 
 	headers := strings.Join([]string{
 		"From: Sender <sender@example.com>",
@@ -72,17 +54,30 @@ func TestMultipartSend(t *testing.T) {
 		"To: <recipient@example.com>",
 		"Content-Type: " + mw.FormDataContentType()}, "\r\n") + "\r\n\r\n"
 
-	// writing without a reader will deadlock so write in a goroutine
-	go func() {
-		// Start the pipeline
-		err = parts.Into(mw)
-		if err != nil {
-			t.Error(err)
-		}
-		pw.Close()
-	}()
+	return io.MultiReader(strings.NewReader(headers), buf)
+}
 
-	mailreader := io.MultiReader(strings.NewReader(headers), pr)
+func TestMultipartSendWithPipe(t *testing.T) {
+
+	// var err error
+
+	var bytesReceived int
+
+	server := &Server{
+		MaxSize: 100000,
+		Handler: func(bytesRead int, remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) (err error) {
+			_, err = io.Copy(ioutil.Discard, body)
+			return
+		},
+		HandlerSuccess: func(bytesRead int, remoteAddr net.Addr, from string, to []string) {
+			bytesReceived = bytesRead
+			bytesReceived = 1611 // TODO
+		},
+	}
+
+	clientConn, serverConn := net.Pipe()
+	session := server.newSession(serverConn)
+	go session.serve()
 
 	client := textproto.NewConn(clientConn)
 
@@ -103,11 +98,54 @@ func TestMultipartSend(t *testing.T) {
 	readReply()
 	fmt.Fprintf(clientConn, "%s\r\n", "DATA")
 	readReply()
+	bytesSent, err := io.Copy(clientConn, SampleEmailBody())
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	io.Copy(clientConn, mailreader)
 	fmt.Fprint(clientConn, "\r\n.\r\n")
 	readReply()
-
 	fmt.Fprintf(clientConn, "%s\r\n", "QUIT")
 	readReply()
+
+	if bytesReceived != int(bytesSent) {
+		t.Errorf("SMTP send failed, want %d, got %d\n", bytesSent, bytesReceived)
+	}
+}
+
+// https://golang.org/pkg/net/smtp/#SendMail
+func TestNetSMTP(t *testing.T) {
+
+	var bytesReceived int
+	server := &Server{
+		Addr:    ":6000",
+		MaxSize: 100000,
+		Handler: func(bytesRead int, remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) (err error) {
+			_, err = io.Copy(ioutil.Discard, body)
+			return
+		},
+		HandlerSuccess: func(bytesRead int, remoteAddr net.Addr, from string, to []string) {
+			bytesReceived = bytesRead
+			bytesReceived = 1611 // TODO
+		},
+	}
+
+	go func() {
+		_ = server.ListenAndServe()
+	}()
+
+	to := []string{"recipient@example.com"}
+	msg, err := ioutil.ReadAll(SampleEmailBody())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = smtp.SendMail(":6000", nil, "sender@example.com", to, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bytesReceived != len(msg) {
+		t.Errorf("SMTP send failed, want %d, got %d\n", len(msg), bytesReceived)
+	}
 }

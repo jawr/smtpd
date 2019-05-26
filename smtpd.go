@@ -23,11 +23,14 @@ var (
 	mailSizeRE = regexp.MustCompile(`[Ss][Ii][Zz][Ee]=(\d+)`)
 )
 
-// Handler function called upon successful receipt of an email.
-type Handler func(remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) error
-
 // HandlerRcpt function called on RCPT. Return accept status.
 type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
+
+// Handler function called to process email DATA body
+type Handler func(bytesRead int, remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) error
+
+// HandlerSuccess called after successful DATA body processed (used for stats)
+type HandlerSuccess func(bytesRead int, remoteAddr net.Addr, from string, to []string)
 
 // ListenAndServe listens on the TCP network address addr
 // and then calls Serve with handler to handle requests
@@ -68,18 +71,19 @@ type LogFunc func(remoteIP, verb, line string)
 
 // Server is an SMTP server.
 type Server struct {
-	Addr        string // TCP address to listen on, defaults to ":25" (all addresses, port 25) if empty
-	Appname     string
-	Handler     Handler
-	HandlerRcpt HandlerRcpt
-	Hostname    string
-	LogRead     LogFunc
-	LogWrite    LogFunc
-	MaxSize     int // Maximum message size allowed, in bytes
-	Timeout     time.Duration
-	TLSConfig   *tls.Config
-	TLSListener bool // Listen for incoming TLS connections only (not recommended as it may reduce compatibility). Ignored if TLS is not configured.
-	TLSRequired bool // Require TLS for every command except NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207. Ignored if TLS is not configured.
+	Addr           string // TCP address to listen on, defaults to ":25" (all addresses, port 25) if empty
+	Appname        string
+	Handler        Handler
+	HandlerRcpt    HandlerRcpt
+	HandlerSuccess HandlerSuccess
+	Hostname       string
+	LogRead        LogFunc
+	LogWrite       LogFunc
+	MaxSize        int // Maximum message size allowed, in bytes
+	Timeout        time.Duration
+	TLSConfig      *tls.Config
+	TLSListener    bool // Listen for incoming TLS connections only (not recommended as it may reduce compatibility). Ignored if TLS is not configured.
+	TLSRequired    bool // Require TLS for every command except NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207. Ignored if TLS is not configured.
 }
 
 // ConfigureTLS creates a TLS configuration from certificate and key files.

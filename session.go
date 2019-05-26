@@ -150,12 +150,9 @@ loop:
 
 			s.writef("354 Start mail input; end with <CR><LF>.<CR><LF>")
 
-			r := s.tpconn.DotReader()
-
-			// If a limit is set
-			if s.srv.MaxSize != 0 {
-				r = &MaxReader{Reader: r, MaxBytes: s.srv.MaxSize}
-			}
+			// Regardless of the limit desired, this is useful to track how much we
+			// have already read in the handler
+			r := &MaxReader{Reader: s.tpconn.DotReader(), MaxBytes: s.srv.MaxSize}
 
 			// Create Received header & write message body into buffer.
 			// buffer.Write(s.makeHeaders(to))
@@ -164,16 +161,12 @@ loop:
 
 				// Pass mail on to handler.
 				if s.srv.Handler != nil {
-					return s.srv.Handler(s.conn.RemoteAddr(), from, to, header, body)
-				}
-
-				if Debug {
+					return s.srv.Handler(r.BytesRead, s.conn.RemoteAddr(), from, to, header, body)
+				} else if Debug {
 					var b []byte
 					b, err = ioutil.ReadAll(body)
 
-					if mr, ok := r.(*MaxReader); ok {
-						fmt.Printf("\nMaxReader Read: %d with limit %d\n", mr.BytesRead, s.srv.MaxSize)
-					}
+					fmt.Printf("\nMaxReader Read: %d with limit %d\n", r.BytesRead, s.srv.MaxSize)
 					fmt.Printf("HEADER: %v\n", header)
 					fmt.Printf("BODY: %d %q\n", len(b), b)
 
@@ -206,6 +199,11 @@ loop:
 					s.writef("451 4.3.0 Requested action aborted: " + err.Error())
 					continue
 				}
+			}
+
+			// Mail processing complete
+			if s.srv.HandlerSuccess != nil {
+				s.srv.HandlerSuccess(r.BytesRead, s.conn.RemoteAddr(), from, to)
 			}
 
 			s.writef("250 2.0.0 Ok: queued")
