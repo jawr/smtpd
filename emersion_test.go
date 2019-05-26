@@ -16,6 +16,12 @@ import (
 // io.Reader/Writer interfaces, and good performance.
 // His code is worth a look.
 //
+// After writing this lib I realized he had already done most of this, including
+// wrapping the connection in textproto for decoding, then wrapping in a limit
+// reader that would return an error if bytes > max.
+// https://github.com/emersion/go-smtp/blob/master/data.go
+//
+//
 
 type EmersionBackend struct{}
 
