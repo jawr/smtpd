@@ -20,6 +20,24 @@ func PickRandomPort() (port string, err error) {
 	return
 }
 
+func sendBody(client *textproto.Conn) (err error) {
+	w := client.DotWriter()
+
+	_, err = io.Copy(w, SampleEmailBody())
+	if err != nil {
+		w.Close()
+		return
+	}
+
+	err = w.Close()
+	if err != nil {
+		return
+	}
+
+	_, _, err = client.ReadResponse(250)
+	return
+}
+
 // Benchmark the mail handling without the network stack introducing latency.
 func BenchmarkRawProcessingSequence(b *testing.B) {
 	server := &Server{} // Default server configuration.
@@ -57,7 +75,14 @@ func BenchmarkRawProcessingSequence(b *testing.B) {
 		sendRecv(client, "RCPT TO:<recipient@example.com>", 250)
 		sendRecv(client, "RCPT TO:", 501)
 		sendRecv(client, "DATA", 354)
-		sendRecv(client, mimeHeaders+"Test message.\r\n.", 250)
+		// sendRecv(client, mimeHeaders+"Test message.\r\n.", 250)
+
+		err := sendBody(client)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		// sendRecv(client, "\n", 250)
 		sendRecv(client, "QUIT", 221)
 	}
 }
