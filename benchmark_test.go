@@ -1,6 +1,7 @@
 package smtpd
 
 import (
+	"bytes"
 	"io"
 	"io/ioutil"
 	"net"
@@ -20,10 +21,29 @@ func PickRandomPort() (port string, err error) {
 	return
 }
 
+var body []byte
+
 func sendBody(client *textproto.Conn) (err error) {
 	w := client.DotWriter()
 
-	_, err = io.Copy(w, SampleEmailBody())
+	// Creating this body for every test is muddling the profiling results
+	// _, err = io.Copy(w, SampleEmailBody())
+	// if err != nil {
+	// 	w.Close()
+	// 	return
+	// }
+
+	// Global variables FTW because I don't care enough yet to DI
+	if body == nil {
+		var b []byte
+		b, err = ioutil.ReadAll(SampleEmailBody())
+		if err != nil {
+			return
+		}
+		body = b
+	}
+
+	_, err = io.Copy(w, bytes.NewReader(body))
 	if err != nil {
 		w.Close()
 		return

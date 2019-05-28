@@ -163,6 +163,11 @@ func (srv *Server) ListenAndServe() error {
 // Serve creates a new SMTP session after a network connection is established.
 func (srv *Server) Serve(ln net.Listener) error {
 	defer ln.Close()
+
+	// Request throttler limits how many clients we're talking to at a time
+	// The rest pool up, waiting their turn
+	sema := make(chan struct{}, 200)
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -171,9 +176,13 @@ func (srv *Server) Serve(ln net.Listener) error {
 			}
 			return err
 		}
-		// TODO request throttler
+
+		sema <- struct{}{}
 		session := srv.newSession(conn)
-		go session.serve()
+		go func() {
+			session.serve()
+			<-sema
+		}()
 	}
 }
 
@@ -192,13 +201,13 @@ func (srv *Server) newSession(conn net.Conn) (s *session) {
 	}
 
 	// Get remote end info for the Received header.
-	s.remoteIP, _, _ = net.SplitHostPort(s.conn.RemoteAddr().String())
-	names, err := net.LookupAddr(s.remoteIP)
-	if err == nil && len(names) > 0 {
-		s.remoteHost = names[0]
-	} else {
-		s.remoteHost = "unknown"
-	}
+	// s.remoteIP, _, _ = net.SplitHostPort(s.conn.RemoteAddr().String())
+	// names, err := net.LookupAddr(s.remoteIP)
+	// if err == nil && len(names) > 0 {
+	// 	s.remoteHost = names[0]
+	// } else {
+	// 	s.remoteHost = "unknown"
+	// }
 
 	// Set tls = true if TLS is already in use.
 	_, s.tls = s.conn.(*tls.Conn)

@@ -157,11 +157,11 @@ loop:
 			// Create Received header & write message body into buffer.
 			// buffer.Write(s.makeHeaders(to))
 
-			err = mimestream.HandleEmailFromReader(r, func(header textproto.MIMEHeader, body io.Reader) error {
+			err = mimestream.HandleEmailFromReader(r, func(header textproto.MIMEHeader, body io.Reader) (err error) {
 
 				// Pass mail on to handler.
 				if s.srv.Handler != nil {
-					return s.srv.Handler(r.BytesRead, s.conn.RemoteAddr(), from, to, header, body)
+					err = s.srv.Handler(r.BytesRead, s.conn.RemoteAddr(), from, to, header, body)
 				} else if Debug {
 					var b []byte
 					b, err = ioutil.ReadAll(body)
@@ -173,15 +173,14 @@ loop:
 					if err != nil {
 						return err
 					}
-				} else {
-					// Ignore body
-					_, err = io.Copy(ioutil.Discard, body)
-					if err != nil {
-						return err
-					}
 				}
 
-				return nil
+				// Read any remaining body to trigger maxSizeExceeded if needed
+				if err == nil {
+					_, err = io.Copy(ioutil.Discard, body)
+				}
+
+				return
 			})
 
 			if err != nil {
@@ -200,6 +199,9 @@ loop:
 					continue
 				}
 			}
+
+			// Read anything left
+			// io.Copy(ioutil.Discard, r)
 
 			// Mail processing complete
 			if s.srv.HandlerSuccess != nil {
