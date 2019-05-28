@@ -4,8 +4,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net/smtp"
+	"net/textproto"
 	"testing"
 
+	"github.com/Xeoncross/mimestream"
 	esmtp "github.com/emersion/go-smtp"
 )
 
@@ -20,6 +22,9 @@ import (
 // wrapping the connection in textproto for decoding, then wrapping in a limit
 // reader that would return an error if bytes > max.
 // https://github.com/emersion/go-smtp/blob/master/data.go
+//
+// This file benchmarks his code to provide a comparison to this system which
+// is purposely missing features like AUTH support.
 //
 //
 
@@ -44,8 +49,12 @@ func (s *EmersionSession) Rcpt(to string) error {
 }
 
 func (s *EmersionSession) Data(r io.Reader) error {
-	_, err := io.Copy(ioutil.Discard, r)
-	return err
+
+	// TODO benchmark github.com/emersion/go-message instead of github.com/xeoncross/mimestream
+	return mimestream.HandleEmailFromReader(r, func(header textproto.MIMEHeader, body io.Reader) error {
+		_, err := io.Copy(ioutil.Discard, body)
+		return err
+	})
 }
 
 func (s *EmersionSession) Reset() {}
