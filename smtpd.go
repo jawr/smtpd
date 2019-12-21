@@ -201,13 +201,13 @@ func (srv *Server) newSession(conn net.Conn) (s *session) {
 	}
 
 	// Get remote end info for the Received header.
-	// s.remoteIP, _, _ = net.SplitHostPort(s.conn.RemoteAddr().String())
-	// names, err := net.LookupAddr(s.remoteIP)
-	// if err == nil && len(names) > 0 {
-	// 	s.remoteHost = names[0]
-	// } else {
-	// 	s.remoteHost = "unknown"
-	// }
+	s.remoteIP, _, _ = net.SplitHostPort(s.conn.RemoteAddr().String())
+	names, err := net.LookupAddr(s.remoteIP)
+	if err == nil && len(names) > 0 {
+		s.remoteHost = names[0]
+	} else {
+		s.remoteHost = "unknown"
+	}
 
 	// Set tls = true if TLS is already in use.
 	_, s.tls = s.conn.(*tls.Conn)
