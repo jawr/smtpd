@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Xeoncross/mimestream"
 )
 
 type session struct {
@@ -157,31 +155,12 @@ loop:
 			// Create Received header & write message body into buffer.
 			// buffer.Write(s.makeHeaders(to))
 
-			err = mimestream.HandleEmailFromReader(r, func(header textproto.MIMEHeader, body io.Reader) (err error) {
-
-				// Pass mail on to handler.
-				if s.srv.Handler != nil {
-					err = s.srv.Handler(r.BytesRead, s.conn.RemoteAddr(), from, to, header, body)
-				} else if Debug {
-					var b []byte
-					b, err = ioutil.ReadAll(body)
-
-					fmt.Printf("\nMaxReader Read: %d with limit %d\n", r.BytesRead, s.srv.MaxSize)
-					fmt.Printf("HEADER: %v\n", header)
-					fmt.Printf("BODY: %d %q\n", len(b), b)
-
-					if err != nil {
-						return err
-					}
-				}
-
-				// Read any remaining body to trigger maxSizeExceeded if needed
-				if err == nil {
-					_, err = io.Copy(ioutil.Discard, body)
-				}
-
-				return
-			})
+			if s.srv.Handler != nil {
+				err = s.srv.Handler(s.conn.RemoteAddr(), from, to, r)
+			} else {
+				// discard
+				_, err = io.Copy(ioutil.Discard, body)
+			}
 
 			if err != nil {
 				switch err.(type) {

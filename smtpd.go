@@ -27,7 +27,7 @@ var (
 type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
 
 // Handler function called to process email DATA body
-type Handler func(bytesRead int, remoteAddr net.Addr, from string, to []string, header textproto.MIMEHeader, body io.Reader) error
+type Handler func(remoteAddr net.Addr, from string, to []string, body io.Reader) error
 
 // HandlerSuccess called after successful DATA body processed (used for stats)
 type HandlerSuccess func(bytesRead int, remoteAddr net.Addr, from string, to []string)
