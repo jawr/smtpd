@@ -159,7 +159,7 @@ loop:
 				err = s.srv.Handler(s.conn.RemoteAddr(), from, to, r)
 			} else {
 				// discard
-				_, err = io.Copy(ioutil.Discard, body)
+				_, err = io.Copy(ioutil.Discard, r)
 			}
 
 			if err != nil {
