@@ -281,11 +281,7 @@ func (s *session) writef(format string, args ...interface{}) (err error) {
 	if Debug {
 		line := fmt.Sprintf(format, args...)
 		verb := "WROTE"
-		if s.srv.LogWrite != nil {
-			s.srv.LogWrite(s.remoteIP, verb, line)
-		} else {
-			log.Println(s.remoteIP, verb, line)
-		}
+		log.Println(s.remoteIP, verb, line)
 	}
 
 	return
@@ -304,11 +300,7 @@ func (s *session) readLine() (line string, err error) {
 
 	if Debug {
 		verb := "READ"
-		if s.srv.LogRead != nil {
-			s.srv.LogRead(s.remoteIP, verb, line)
-		} else {
-			log.Println(s.remoteIP, verb, line)
-		}
+		log.Println(s.remoteIP, verb, line)
 	}
 
 	return
